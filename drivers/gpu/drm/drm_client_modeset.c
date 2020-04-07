@@ -86,6 +86,10 @@ static void drm_client_modeset_release(struct drm_client_dev *client)
 		}
 		modeset->num_connectors = 0;
 	}
+
+	kfree(client->properties);
+	client->properties = NULL;
+	client->num_properties = 0;
 }
 
 void drm_client_modeset_free(struct drm_client_dev *client)
@@ -920,6 +924,130 @@ free_connectors:
 EXPORT_SYMBOL(drm_client_modeset_probe);
 
 /**
+ * drm_client_modeset_set() - Set modeset configuration
+ * @client: DRM client
+ * @connector: Connector
+ * @mode: Display mode
+ * @fb: Framebuffer
+ *
+ * This function releases any current modeset info, including properties, and
+ * sets the new modeset in the client's modeset array.
+ *
+ * Returns:
+ * Zero on success or negative error code on failure.
+ */
+int drm_client_modeset_set(struct drm_client_dev *client, struct drm_connector *connector,
+			   struct drm_display_mode *mode, struct drm_framebuffer *fb)
+{
+	struct drm_mode_set *modeset;
+	int ret = -ENOENT;
+
+	mutex_lock(&client->modeset_mutex);
+
+	drm_client_modeset_release(client);
+
+	drm_client_for_each_modeset(modeset, client) {
+		if (!connector_has_possible_crtc(connector, modeset->crtc))
+			continue;
+
+		modeset->mode = drm_mode_duplicate(client->dev, mode);
+		if (!modeset->mode) {
+			ret = -ENOMEM;
+			break;
+		}
+
+		drm_mode_set_crtcinfo(modeset->mode, CRTC_INTERLACE_HALVE_V);
+
+		drm_connector_get(connector);
+		modeset->connectors[modeset->num_connectors++] = connector;
+
+		modeset->fb = fb;
+		ret = 0;
+		break;
+	}
+
+	mutex_unlock(&client->modeset_mutex);
+
+	return ret;
+}
+EXPORT_SYMBOL(drm_client_modeset_set);
+
+/**
+ * drm_client_modeset_set_property() - Set a property on the current configuration
+ * @client: DRM client
+ * @obj: DRM Mode Object
+ * @prop: DRM Property
+ * @value: Property value
+ *
+ * Note: Currently only implemented for atomic drivers.
+ *
+ * Returns:
+ * Zero on success or negative error code on failure.
+ */
+int drm_client_modeset_set_property(struct drm_client_dev *client, struct drm_mode_object *obj,
+				    struct drm_property *prop, u64 value)
+{
+	struct drm_client_property *properties;
+	int ret = 0;
+
+	if (!prop)
+		return -EINVAL;
+
+	if (!drm_drv_uses_atomic_modeset(client->dev))
+		return -EOPNOTSUPP;
+
+	mutex_lock(&client->modeset_mutex);
+
+	properties = krealloc(client->properties,
+			      (client->num_properties + 1) * sizeof(*properties), GFP_KERNEL);
+	if (!properties) {
+		ret = -ENOMEM;
+		goto unlock;
+	}
+
+	properties[client->num_properties].obj = obj;
+	properties[client->num_properties].prop = prop;
+	properties[client->num_properties].value = value;
+	client->properties = properties;
+	client->num_properties++;
+unlock:
+	mutex_unlock(&client->modeset_mutex);
+
+	return ret;
+}
+EXPORT_SYMBOL(drm_client_modeset_set_property);
+
+/**
+ * drm_client_modeset_set_rotation() - Set rotation on the current configuration
+ * @client: DRM client
+ * @value: Rotation value
+ *
+ * Returns:
+ * Zero on success or negative error code on failure.
+ */
+int drm_client_modeset_set_rotation(struct drm_client_dev *client, u64 value)
+{
+	struct drm_plane *plane = NULL;
+	struct drm_mode_set *modeset;
+
+	mutex_lock(&client->modeset_mutex);
+	drm_client_for_each_modeset(modeset, client) {
+		if (modeset->mode) {
+			plane = modeset->crtc->primary;
+			break;
+		}
+	}
+	mutex_unlock(&client->modeset_mutex);
+
+	if (!plane)
+		return -ENOENT;
+
+	return drm_client_modeset_set_property(client, &plane->base,
+					       plane->rotation_property, value);
+}
+EXPORT_SYMBOL(drm_client_modeset_set_rotation);
+
+/**
  * drm_client_rotation() - Check the initial rotation value
  * @modeset: DRM modeset
  * @rotation: Returned rotation value
@@ -1013,6 +1141,7 @@ static int drm_client_modeset_commit_atomic(struct drm_client_dev *client, bool 
 	struct drm_atomic_state *state;
 	struct drm_modeset_acquire_ctx ctx;
 	struct drm_mode_set *mode_set;
+	unsigned int i;
 	int ret;
 
 	drm_modeset_acquire_init(&ctx, 0);
@@ -1071,6 +1200,14 @@ retry:
 
 			crtc_state->active = false;
 		}
+	}
+
+	for (i = 0; i < client->num_properties; i++) {
+		struct drm_client_property *prop = &client->properties[i];
+
+		ret = drm_atomic_set_property(state, NULL, prop->obj, prop->prop, prop->value);
+		if (ret)
+			goto out_state;
 	}
 
 	if (check)
