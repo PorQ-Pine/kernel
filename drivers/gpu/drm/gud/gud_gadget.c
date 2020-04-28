@@ -591,7 +591,7 @@ static int gud_gadget_req_get_descriptor(struct gud_gadget *gdg, unsigned int in
 	if (index || !size)
 		return -EPROTO;
 
-	desc.magic = GUD_DISPLAY_MAGIC;
+	desc.magic = cpu_to_le32(GUD_DISPLAY_MAGIC);
 	desc.version = 1;
 	desc.max_buffer_size = cpu_to_le32(gdg->max_buffer_size);
 	desc.flags = cpu_to_le32(GUD_DISPLAY_FLAG_STATUS_ON_SET);
