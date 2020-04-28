@@ -7388,7 +7388,9 @@ DRM DRIVER FOR GENERIC USB DISPLAY
 S:	Orphan
 W:	https://github.com/notro/gud/wiki
 T:	git https://gitlab.freedesktop.org/drm/misc/kernel.git
+F:	Documentation/ABI/testing/configfs-usb-gadget-gud
 F:	drivers/gpu/drm/gud/
+F:	drivers/usb/gadget/function/f_gud.c
 F:	include/drm/gud.h
 
 DRM DRIVER FOR GRAIN MEDIA GM12U320 PROJECTORS
