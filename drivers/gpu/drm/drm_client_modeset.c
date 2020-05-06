@@ -1268,6 +1268,26 @@ int drm_client_modeset_dpms(struct drm_client_dev *client, int mode)
 }
 EXPORT_SYMBOL(drm_client_modeset_dpms);
 
+/**
+ * drm_client_modeset_disable() - Disable all outputs
+ * @client: DRM client
+ *
+ * This function disables all outputs by first clearing the modeset array and
+ * then committing the empty modesets.
+ *
+ * Returns:
+ * Zero on success or negative error code on failure.
+ */
+int drm_client_modeset_disable(struct drm_client_dev *client)
+{
+	mutex_lock(&client->modeset_mutex);
+	drm_client_modeset_release(client);
+	mutex_unlock(&client->modeset_mutex);
+
+	return drm_client_modeset_commit(client);
+}
+EXPORT_SYMBOL(drm_client_modeset_disable);
+
 #ifdef CONFIG_DRM_KUNIT_TEST
 #include "tests/drm_client_modeset_test.c"
 #endif
