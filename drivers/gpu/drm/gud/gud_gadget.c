@@ -250,7 +250,6 @@ static int gud_gadget_req_set_state_check(struct gud_gadget *gdg, unsigned int i
 	struct drm_connector *connector;
 	unsigned int i, num_properties;
 	struct drm_display_mode mode;
-	void *vaddr;
 	u32 format;
 	int ret;
 
@@ -291,12 +290,6 @@ static int gud_gadget_req_set_state_check(struct gud_gadget *gdg, unsigned int i
 						       format);
 		if (IS_ERR(buffer))
 			return PTR_ERR(buffer);
-
-		vaddr = drm_client_buffer_vmap(buffer);
-		if (IS_ERR(vaddr)) {
-			drm_client_framebuffer_delete(buffer);
-			return PTR_ERR(vaddr);
-		}
 
 		gdg->buffer_check = buffer;
 	} else {
@@ -397,23 +390,27 @@ static size_t gud_gadget_write_buffer_memcpy(struct drm_client_buffer *buffer,
 					     struct drm_rect *rect)
 {
 	unsigned int cpp = buffer->fb->format->cpp[0];
-	size_t dst_pitch = buffer->fb->pitches[0];
 	size_t src_pitch = drm_rect_width(rect) * cpp;
+	size_t dst_pitch = buffer->fb->pitches[0];
+	struct dma_buf_map dst;
 	unsigned int y;
-	void *dst;
+	int ret;
 
-	/* Get the address, it's already mapped */
-	dst = drm_client_buffer_vmap(buffer);
-	dst += rect->y1 * dst_pitch;
-	dst += rect->x1 * cpp;
+	ret = drm_client_buffer_vmap(buffer, &dst);
+	if (ret)
+		return len;
+
+	dma_buf_map_incr(&dst, rect->y1 * dst_pitch + rect->x1 * cpp);
 
 	for (y = 0; y < drm_rect_height(rect) && len; y++) {
 		src_pitch = min(src_pitch, len);
-		memcpy(dst, src, src_pitch);
+		dma_buf_map_memcpy_to(&dst, src, src_pitch);
+		dma_buf_map_incr(&dst, dst_pitch);
 		src += src_pitch;
-		dst += dst_pitch;
 		len -= src_pitch;
 	}
+
+	drm_client_buffer_vunmap(buffer);
 
 	return len;
 }
@@ -481,13 +478,6 @@ int gud_gadget_write_buffer(struct gud_gadget *gdg, const void *buf, size_t len)
 		goto out;
 	}
 
-	if (len > (drm_rect_width(rect) * drm_rect_height(rect) * fb->format->cpp[0])) {
-		pr_err("%s: Buffer is too big for rectangle: " DRM_RECT_FMT " len=%zu\n",
-		       __func__, DRM_RECT_ARG(rect), len);
-		ret = -EINVAL;
-		goto out;
-	}
-
 	remain = gud_gadget_write_buffer_memcpy(buffer, buf, len, rect);
 	if (remain) {
 		pr_err("%s: Failed to write buffer: remain=%zu\n", __func__, remain);
@@ -515,6 +505,7 @@ int gud_gadget_req_set_buffer(struct gud_gadget *gdg, const struct gud_set_buffe
 	struct drm_client_buffer *buffer;
 	struct drm_rect rect;
 	int ret = 0;
+	u64 pitch;
 
 	if (!refcount_inc_not_zero(&gdg->usecnt))
 		return -ENODEV;
@@ -554,6 +545,14 @@ int gud_gadget_req_set_buffer(struct gud_gadget *gdg, const struct gud_set_buffe
 	} else {
 		gdg->set_buffer_compression = 0;
 		gdg->set_buffer_compressed_length = 0;
+	}
+
+	pitch = drm_format_info_min_pitch(buffer->fb->format, 0, drm_rect_width(&rect));
+	if (length > (drm_rect_height(&rect) * pitch)) {
+		pr_err("%s: Buffer is too big for rectangle: " DRM_RECT_FMT " len=%u\n",
+		       __func__, DRM_RECT_ARG(&rect), length);
+		ret = -EINVAL;
+		goto out;
 	}
 out:
 	refcount_dec(&gdg->usecnt);
