@@ -852,7 +852,7 @@ static struct usb_function_instance *f_gud_alloc_func_inst(void)
 	mutex_init(&opts->lock);
 	opts->func_inst.free_func_inst = f_gud_free_func_inst;
 	opts->compression = ~0;
-	opts->connectors = ~0UL;
+	opts->connectors = ~0U;
 
 	config_group_init_type_name(&opts->func_inst.group, "", &f_gud_func_type);
 
