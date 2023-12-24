@@ -124,6 +124,61 @@
 		cache-sets = <512>;
 	};
 
+	cpu0_opp_table: opp-table-0 {
+		compatible = "operating-points-v2";
+		opp-shared;
+
+		opp-408000000 {
+			opp-hz = /bits/ 64 <408000000>;
+			opp-microvolt = <900000 900000 1150000>;
+			clock-latency-ns = <40000>;
+		};
+
+		opp-600000000 {
+			opp-hz = /bits/ 64 <600000000>;
+			opp-microvolt = <900000 900000 1150000>;
+		};
+
+		opp-816000000 {
+			opp-hz = /bits/ 64 <816000000>;
+			opp-microvolt = <900000 900000 1150000>;
+			opp-suspend;
+		};
+
+		opp-1104000000 {
+			opp-hz = /bits/ 64 <1104000000>;
+			opp-microvolt = <900000 900000 1150000>;
+		};
+
+		opp-1416000000 {
+			opp-hz = /bits/ 64 <1416000000>;
+			opp-microvolt = <900000 900000 1150000>;
+		};
+
+		opp-1608000000 {
+			opp-hz = /bits/ 64 <1608000000>;
+			opp-microvolt = <975000 975000 1150000>;
+		};
+
+		opp-1800000000 {
+			opp-hz = /bits/ 64 <1800000000>;
+			opp-microvolt = <1050000 1050000 1150000>;
+		};
+	};
+
+	/* reserved-memory { */
+	/*      #address-cells = <0x00000002>; */
+	 /* #size-cells = <0x00000002>; */
+	/*      ranges; */
+
+	 /* ebcframebuffer: buffer@10900000 { */
+	/*              compatible = "shared-dma-pool"; */
+	/*              no-map; */
+	/*              reg = <0x00000000 0x10900000 0x00000000 0x02000000>; */
+	 /* }; */
+	/* }; */
+
+
 	display_subsystem: display-subsystem {
 		compatible = "rockchip,display-subsystem";
 		ports = <&vop_out>;
