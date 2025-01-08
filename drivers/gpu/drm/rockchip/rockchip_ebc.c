@@ -491,7 +491,7 @@ static struct rockchip_ebc_ctx *rockchip_ebc_ctx_alloc(struct rockchip_ebc *ebc,
 	ctx->final_buffer[1] = kmalloc(gray4_size, GFP_KERNEL);
 	ctx->final_atomic_update = kmalloc(gray4_size, GFP_KERNEL);
 	ctx->phase[0] = kmalloc(phase_size, GFP_KERNEL | GFP_DMA);
-	ctx->phase[1] = kmalloc(phase_size, GFP_KERNEL);
+	ctx->phase[1] = kmalloc(phase_size, GFP_KERNEL | GFP_DMA);
 	if (!ctx->prev || !ctx->next || !ctx->final_buffer[0] || !ctx->final_buffer[1] || !ctx->final_atomic_update ||
 	    !ctx->phase[0] || !ctx->phase[1]) {
 		rockchip_ebc_ctx_free(ctx);
