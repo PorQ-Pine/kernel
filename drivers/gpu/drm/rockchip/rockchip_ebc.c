@@ -151,6 +151,8 @@ MODULE_FIRMWARE(EBC_FIRMWARE);
 #define EBC_OFFCONTENT "rockchip/rockchip_ebc_default_screen.bin"
 MODULE_FIRMWARE(EBC_OFFCONTENT);
 
+// #define ROCKCHIP_EBC_BLIT_PHASE_CHECK
+
 struct rockchip_ebc {
 	struct clk			*dclk;
 	struct clk			*hclk;
@@ -191,6 +193,12 @@ struct rockchip_ebc {
 	u8              *final_atomic_update;
 	u8				*phase[2];
 };
+
+#ifdef ROCKCHIP_EBC_BLIT_PHASE_CHECK
+static bool check_blit_phase = 0;
+module_param(check_blit_phase, bool, 0644);
+MODULE_PARM_DESC(check_blit_phase, "waveform to use for display updates");
+#endif
 
 static int default_waveform = DRM_EPD_WF_GC16;
 module_param(default_waveform, int, 0644);
@@ -1006,7 +1014,7 @@ static void rockchip_ebc_blit_direct(const struct rockchip_ebc_ctx *ctx,
 
 static void rockchip_ebc_blit_phase(const struct rockchip_ebc_ctx *ctx,
 				    u8 *dst, u8 phase,
-				    const struct drm_rect *clip)
+				    const struct drm_rect *clip, u8 *other_buffer, int last_phase, int frame)
 {
 	unsigned int pitch = ctx->phase_pitch;
 	unsigned int width = clip->x2 - clip->x1;
@@ -1014,11 +1022,34 @@ static void rockchip_ebc_blit_phase(const struct rockchip_ebc_ctx *ctx,
 	u8 *dst_line;
 
 	dst_line = dst + clip->y1 * pitch + clip->x1;
+	u8 *dst_line2 = other_buffer + clip->y1 * pitch + clip->x1;
 
 	for (y = clip->y1; y < clip->y2; y++) {
+#ifdef ROCKCHIP_EBC_BLIT_PHASE_CHECK
+		if (check_blit_phase) {
+			for (unsigned int x = 0; x < width; ++x) {
+				int sched_err = 0;
+				if (phase == 0) {
+					sched_err |= dst_line[x] != 0xff && dst_line[x] != phase;
+					sched_err |= (dst_line2[x] != 0xff) << 1;
+				} else if (phase == 1) {
+					sched_err |= (dst_line[x] != 0xff && dst_line[x] != phase) << 2;
+					sched_err |= (dst_line2[x] != 0) << 3;
+				} else if (phase == 0xff) {
+					sched_err |= (!((dst_line2[x] == 0xff && (dst_line[x] == last_phase - 1 || dst_line[x] == 0xff)) || (dst_line2[x] == last_phase - 1 && (dst_line[x] == last_phase - 2 || dst_line[x] == 0xff)))) << 4;
+				} else {
+					sched_err |= (!(dst_line2[x] == phase - 1 && (dst_line[x] == phase - 2 || dst_line[x] == phase))) << 5;
+				}
+				if (sched_err) {
+					pr_info("scheduling error: err=%d frame=%d x=%d y=%d dst=%d other_dst=%d phase=%d, last_phase=%d", sched_err, frame, clip->x1 + x, y, dst_line[x], dst_line2[x], phase, last_phase);
+				}
+			}
+		}
+#endif
 		memset(dst_line, phase, width);
 
 		dst_line += pitch;
+		dst_line2 += pitch;
 	}
 }
 
@@ -1189,7 +1220,7 @@ static void rockchip_ebc_partial_refresh(struct rockchip_ebc *ebc,
 							 &area->clip);
 			else
 				rockchip_ebc_blit_phase(ctx, phase_buffer,
-							phase, &area->clip);
+							phase, &area->clip, ctx->phase[(frame + 1) % 2], last_phase, frame);
 
 			/*
 			 * Copy ctx->next to ctx->prev after the last phase.
