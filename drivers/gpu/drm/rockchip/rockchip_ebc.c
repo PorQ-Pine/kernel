@@ -1236,16 +1236,16 @@ static void rockchip_ebc_partial_refresh(struct rockchip_ebc *ebc,
 	if (dma_mapping_error(dev, phase_handles[0])) {
 		drm_err(drm, "phase_handles[0] dma mapping error");
 	}
-	/* phase_handles[1] = dma_map_single(dev, ctx->phase[1], ctx->phase_size, DMA_TO_DEVICE); */
-	/* if (dma_mapping_error(dev, phase_handles[1])) { */
-	/* 	drm_err(drm, "phase_handles[0] dma mapping error"); */
-	/* } */
+	phase_handles[1] = dma_map_single(dev, ctx->phase[1], ctx->phase_size, DMA_TO_DEVICE);
+	if (dma_mapping_error(dev, phase_handles[1])) {
+		drm_err(drm, "phase_handles[0] dma mapping error");
+	}
 
 	times[time_index++] = ktime_get();
 	for (frame = 0;; frame++) {
 		/* do not swap phase buffers ... for now */
-		u8 *phase_buffer = ctx->phase[0];
-		dma_addr_t phase_handle = phase_handles[0];
+		u8 *phase_buffer = ctx->phase[frame % 2];
+		dma_addr_t phase_handle = phase_handles[frame % 2];
 		bool sync_next = false;
 		bool sync_prev = false;
 		int split_counter = 0;
@@ -1354,6 +1354,14 @@ static void rockchip_ebc_partial_refresh(struct rockchip_ebc *ebc,
 			// TODO: should we try to splice the queue here before quitting?
 			break;
 		}
+		if (frame > 0 && !wait_for_completion_timeout(&ebc->display_end,
+						 EBC_FRAME_TIMEOUT))
+			drm_err(drm, "Frame %d timed out!\n", frame);
+
+		// record time after frame completed
+		if (frame > 0 && time_index < 100){
+			times[time_index++] = ktime_get();
+		}
 
 		regmap_write(ebc->regmap,
 			     direct_mode ? EBC_WIN_MST0 : EBC_WIN_MST2,
@@ -1393,20 +1401,14 @@ static void rockchip_ebc_partial_refresh(struct rockchip_ebc *ebc,
 			usleep_range(1 * 1000 - 100, 1 * 1000);
 		}
 
-		if (!wait_for_completion_timeout(&ebc->display_end,
-						 EBC_FRAME_TIMEOUT))
-			drm_err(drm, "Frame %d timed out!\n", frame);
-
-		// record time after frame completed
-		if (time_index <= 59){
-			times[time_index] = ktime_get();
-			time_index++;
-		}
-
 		if (kthread_should_stop()) {
 			break;
 		};
 	}
+
+	if (frame > 0 && !wait_for_completion_timeout(&ebc->display_end,
+						 EBC_FRAME_TIMEOUT))
+		drm_err(drm, "Frame %d timed out!\n", frame);
 	dma_unmap_single(dev, phase_handles[0], ctx->phase_size, DMA_TO_DEVICE);
 	dma_unmap_single(dev, phase_handles[1], ctx->phase_size, DMA_TO_DEVICE);
 
