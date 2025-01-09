@@ -634,8 +634,8 @@
 		compatible = "rockchip,rk3568-ebc";
 		reg = <0x0 0xfdec0000 0x0 0x5000>;
 		interrupts = <GIC_SPI 17 IRQ_TYPE_LEVEL_HIGH>;
-		clocks = <&cru HCLK_EBC>, <&cru DCLK_EBC>;
-		clock-names = "hclk", "dclk";
+		clocks = <&cru HCLK_EBC>, <&cru DCLK_EBC>, <&cru CPLL_333M>;
+		clock-names = "hclk", "dclk", "cpll_333m";
 		pinctrl-0 = <&ebc_pins>;
 		pinctrl-names = "default";
 		power-domains = <&power RK3568_PD_RGA>;
