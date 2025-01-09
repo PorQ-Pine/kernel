@@ -1321,16 +1321,19 @@ static void rockchip_ebc_partial_refresh(struct rockchip_ebc *ebc,
 			 * Technically, this races with the hardware computing
 			 * the last phase, but the last phase is all zeroes
 			 * anyway, regardless of prev/next (see above).
-			 *
-			 * Keeping the area in the list for one extra frame
-			 * also ensures both phase buffers get set to 0xff.
 			 */
-			if (frame_delta > last_phase) {
+			if (frame_delta == last_phase) {
 				rockchip_ebc_blit_pixels(ctx, ctx->prev,
 							 ctx->next,
 							 &area->clip);
 				sync_prev = true;
+			}
 
+			/*
+			 * Keeping the area in the list for one extra frame
+			 * also ensures both phase buffers get set to 0xff.
+			 */
+			if (frame_delta > last_phase) {
 				drm_dbg(drm, "area %p (" DRM_RECT_FMT ") finished on %u\n",
 					area, DRM_RECT_ARG(&area->clip), frame);
 
