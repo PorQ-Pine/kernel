@@ -488,7 +488,7 @@ static void rockchip_ebc_ctx_free(struct rockchip_ebc_ctx *ctx)
 static struct rockchip_ebc_ctx *rockchip_ebc_ctx_alloc(struct rockchip_ebc *ebc, u32 width, u32 height)
 {
 	u32 gray4_size = width * height / 2;
-	u32 phase_size = width * height;
+	u32 phase_size = direct_mode ? (width * height + 3) / 4 : width * height;
 	struct rockchip_ebc_ctx *ctx;
 	/* pr_info("ebc: %s", __func__); */
 
@@ -519,7 +519,7 @@ static struct rockchip_ebc_ctx *rockchip_ebc_ctx_alloc(struct rockchip_ebc *ebc,
 	ctx->switch_required = true;
 	ctx->gray4_pitch = width / 2;
 	ctx->gray4_size  = gray4_size;
-	ctx->phase_pitch = width;
+	ctx->phase_pitch = direct_mode ? width / 4 : width;
 	ctx->phase_size  = phase_size;
 
 	// we keep track of the updated area and use this value to trigger global
@@ -973,23 +973,30 @@ static bool rockchip_ebc_schedule_area(struct list_head *areas,
 static void rockchip_ebc_blit_direct(const struct rockchip_ebc_ctx *ctx,
 				     u8 *dst, u8 phase,
 				     const struct drm_epd_lut *lut,
-				     const struct drm_rect *clip)
+				     const struct drm_rect *clip,
+				     bool diff)
 {
 	const u32 *phase_lut = (const u32 *)lut->buf + 16 * phase;
-	unsigned int dst_pitch = ctx->phase_pitch / 4;
+	unsigned int dst_pitch = ctx->phase_pitch;
 	unsigned int src_pitch = ctx->gray4_pitch;
 	unsigned int x, y;
 	u8 *dst_line;
 	u32 src_line;
+	unsigned int x_start = clip->x1 ^ (clip->x1 & 3);
 
-	dst_line = dst + clip->y1 * dst_pitch + clip->x1 / 4;
-	src_line = clip->y1 * src_pitch + clip->x1 / 2;
+	/* Each byte in the phase buffer [DCBA] maps to a horizontal block of four pixels in Y4 format [BA] [DC] */
+	u8 adjust_masks[] = { 0xff, 0xfc, 0xf0, 0xc0 };
+	u8 x_start_mask = adjust_masks[clip->x1 & 3];
+	u8 x_end_mask = ~adjust_masks[clip->x2 & 3];
+
+	dst_line = dst + clip->y1 * dst_pitch + x_start / 4;
+	src_line = clip->y1 * src_pitch + x_start / 2;
 
 	for (y = clip->y1; y < clip->y2; y++) {
 		u32 src_offset = src_line;
 		u8 *dbuf = dst_line;
 
-		for (x = clip->x1; x < clip->x2; x += 4) {
+		for (x = x_start; x < clip->x2; x += 4) {
 			u8 prev0 = ctx->prev[src_offset];
 			u8 next0 = ctx->next[src_offset++];
 			u8 prev1 = ctx->prev[src_offset];
@@ -1000,14 +1007,15 @@ static void rockchip_ebc_blit_direct(const struct rockchip_ebc_ctx *ctx,
 			 * Each value is two bits, so the last dimension neatly
 			 * fits in a 32-bit word.
 			 */
-			u8 data = ((phase_lut[next0 & 0xf] >> ((prev0 & 0xf) << 1)) & 0x3) << 0 |
-				  ((phase_lut[next0 >>  4] >> ((prev0 >>  4) << 1)) & 0x3) << 2 |
-				  ((phase_lut[next1 & 0xf] >> ((prev1 & 0xf) << 1)) & 0x3) << 4 |
-				  ((phase_lut[next1 >>  4] >> ((prev1 >>  4) << 1)) & 0x3) << 6;
+			u8 data = ((phase_lut[prev0 & 0xf] >> ((next0 & 0xf) << 1)) & 0x3) << 0 |
+				  ((phase_lut[prev0 >>  4] >> ((next0 >>  4) << 1)) & 0x3) << 2 |
+				  ((phase_lut[prev1 & 0xf] >> ((next1 & 0xf) << 1)) & 0x3) << 4 |
+				  ((phase_lut[prev1 >>  4] >> ((next1 >>  4) << 1)) & 0x3) << 6;
 
 			/* Diff mode ignores pixels that did not change brightness. */
-			if (diff_mode) {
-				u8 mask = ((next0 ^ prev0) & 0x0f ? 0x03 : 0) |
+			u8 mask = 0xff;
+			if (diff) {
+				mask = ((next0 ^ prev0) & 0x0f ? 0x03 : 0) |
 					  ((next0 ^ prev0) & 0xf0 ? 0x0c : 0) |
 					  ((next1 ^ prev1) & 0x0f ? 0x30 : 0) |
 					  ((next1 ^ prev1) & 0xf0 ? 0xc0 : 0);
@@ -1015,7 +1023,20 @@ static void rockchip_ebc_blit_direct(const struct rockchip_ebc_ctx *ctx,
 				data &= mask;
 			}
 
-			*dbuf++ = data;
+			// Restore phase data written by other areas
+			u8 data_mask = 0x00;
+
+			// Don't assume 4-byte alignment
+			if (x + 4 > clip->x2) {
+				data &= x_end_mask;
+				data_mask |= ~x_end_mask;
+			}
+			if (x == x_start) {
+				data &= x_start_mask;
+				data_mask |= ~x_start_mask;
+			}
+
+			*dbuf++ = data | (*dbuf & data_mask);
 		}
 
 		dst_line += dst_pitch;
@@ -1223,12 +1244,12 @@ static void rockchip_ebc_partial_refresh(struct rockchip_ebc *ebc,
 			 * last possible phase number), which is guaranteed to
 			 * be neutral for every waveform.
 			 */
- 			phase = frame_delta >= last_phase ? 0xff : frame_delta;
-			/* phase = frame_delta; */
+			phase = frame_delta >= last_phase ? 0xff : frame_delta;
 			if (direct_mode)
 				rockchip_ebc_blit_direct(ctx, phase_buffer,
 							 phase, &ebc->lut,
-							 &area->clip);
+							 &area->clip,
+							 diff_mode);
 			else
 				rockchip_ebc_blit_phase(ctx, phase_buffer,
 							phase, &area->clip, ctx->phase[(frame + 1) % 2], last_phase, frame);
