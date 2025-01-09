@@ -291,7 +291,7 @@
 			<&cru PLL_GPLL>, <&pmucru PLL_PPLL>,
  			<&cru ACLK_RGA_PRE>, <&cru CPLL_250M>,
 			<&cru HCLK_RGA_PRE>, <&cru HCLK_EBC>,
-		    <&cru HCLK_JENC>;
+		    <&cru HCLK_JENC>, <&cru CPLL_333M>;
 		// assigned-clock-rates = <32768>, <1200000000>, <200000000>, <300000000>, <300000000>;
 		// assigned-clock-rates = <32768>, <1200000000>, <200000000>, <250000000>, <250000000>, <250000000>, <250000000>, <250000000>;
 		assigned-clock-rates = <32768>,
@@ -299,7 +299,7 @@
 				 <1200000000>, <200000000>,
 				 <300000000>, <300000000>,
 				 <300000000>, <300000000>,
-				 <300000000>;
+				 <300000000>, <33333334>;
 		// stronger artifacting, I suspend instabilities due to too high clock frequencies
 		// assigned-clock-rates = <32768>, <1200000000>, <200000000>, <333400000>, <333400000>, <333400000>, <333400000>, <333400000>;
 		assigned-clock-parents = <&pmucru CLK_RTC32K_FRAC>;
