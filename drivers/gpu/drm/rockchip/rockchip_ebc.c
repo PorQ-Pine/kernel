@@ -1115,13 +1115,11 @@ static void rockchip_ebc_blit_pixels(const struct rockchip_ebc_ctx *ctx,
 
 	for (y = clip->y1; y < clip->y2; y++) {
 		if (start_x_is_odd)
-			// keep only lower bit to restore it after the blitting
-			first_odd = *src_line & 0b00001111;
+			// keep only lower bits to restore it after the blitting
+			first_odd = *dst_line & 0b00001111;
 		if (end_x_is_odd){
-			dst_line += pitch - 1;
-			// keep only the upper bit for restoring later
-			last_odd = *dst_line & 0b11110000;
-			dst_line -= pitch - 1;
+			// keep only the upper bits for restoring later
+			last_odd = *(dst_line + width - 1) & 0b11110000;
 		}
 
 		memcpy(dst_line, src_line, width);
@@ -1132,9 +1130,7 @@ static void rockchip_ebc_blit_pixels(const struct rockchip_ebc_ctx *ctx,
 		}
 		if (end_x_is_odd){
 			// write back the last 4 saved bits
-			dst_line += pitch -1;
-			*dst_line = (*dst_line & 0b00001111) | last_odd;
-			dst_line -= pitch -1;
+			*(dst_line + width - 1) = (*(dst_line + width - 1) & 0b00001111) | last_odd;
 		}
 
 		dst_line += pitch;
