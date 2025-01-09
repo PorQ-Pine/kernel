@@ -538,6 +538,10 @@ static void rockchip_ebc_ctx_release(struct kref *kref)
 	return rockchip_ebc_ctx_free(ctx);
 }
 
+static void rockchip_ebc_global_refresh_direct(struct rockchip_ebc *ebc,
+					struct rockchip_ebc_ctx *ctx
+					);
+
 /*
  * CRTC
  */
@@ -645,6 +649,9 @@ static void rockchip_ebc_global_refresh(struct rockchip_ebc *ebc,
 
 	struct rockchip_ebc_area *area, *next_area;
 	LIST_HEAD(areas);
+
+	if (direct_mode)
+		return rockchip_ebc_global_refresh_direct(ebc, ctx);
 
 	spin_lock(&ctx->queue_lock);
 	list_splice_tail_init(&ctx->queue, &areas);
@@ -1138,6 +1145,72 @@ static void rockchip_ebc_blit_pixels(const struct rockchip_ebc_ctx *ctx,
 	}
 }
 
+static void rockchip_ebc_global_refresh_direct(struct rockchip_ebc *ebc,
+					struct rockchip_ebc_ctx *ctx)
+{
+	struct drm_device *drm = &ebc->drm;
+	u32 last_phase = ebc->lut.num_phases - 1;
+	u32 gray4_size = ctx->gray4_size;
+	struct device *dev = drm->dev;
+	struct drm_rect screen_clip = DRM_RECT_INIT(0, 0, 1872, 1404);
+
+	struct rockchip_ebc_area *area, *next_area;
+	LIST_HEAD(areas);
+
+	dma_addr_t phase_handles[2];
+	phase_handles[0] = dma_map_single(dev, ctx->phase[0], ctx->phase_size, DMA_TO_DEVICE);
+	if (dma_mapping_error(dev, phase_handles[0])) {
+		drm_err(drm, "phase_handles[0] dma mapping error");
+	}
+	phase_handles[1] = dma_map_single(dev, ctx->phase[1], ctx->phase_size, DMA_TO_DEVICE);
+	if (dma_mapping_error(dev, phase_handles[1])) {
+		drm_err(drm, "phase_handles[0] dma mapping error");
+	}
+
+	spin_lock(&ctx->queue_lock);
+	list_splice_tail_init(&ctx->queue, &areas);
+	// switch buffers
+	if(ctx->switch_required){
+		ctx->ebc_buffer_index = !ctx->ebc_buffer_index;
+		ctx->switch_required = false;
+	}
+	ctx->final = ctx->final_buffer[ctx->ebc_buffer_index];
+	spin_unlock(&ctx->queue_lock);
+	memcpy(ctx->next, ctx->final, gray4_size);
+
+	for (int phase = 0; phase <= last_phase; ++phase)
+	{
+		u8 *phase_buffer = ctx->phase[phase % 2];
+		dma_addr_t phase_handle = phase_handles[phase % 2];
+
+		rockchip_ebc_blit_direct(ctx, phase_buffer, phase, &ebc->lut, &screen_clip, false);
+		dma_sync_single_for_device(dev, phase_handle, ctx->phase_size, DMA_TO_DEVICE);
+
+		if (phase > 0 && !wait_for_completion_timeout(&ebc->display_end,
+						 EBC_FRAME_TIMEOUT))
+			drm_err(drm, "Frame %d timed out!\n", phase);
+
+		regmap_write(ebc->regmap, EBC_WIN_MST0, phase_handle);
+		regmap_write(ebc->regmap, EBC_CONFIG_DONE, EBC_CONFIG_DONE_REG_CONFIG_DONE);
+		regmap_write(ebc->regmap, EBC_DSP_START, ebc->dsp_start | EBC_DSP_START_DSP_FRM_START);
+		pr_debug("tcon started on frame %d", phase);
+	}
+
+	// while we wait for the refresh, delete all scheduled areas
+	list_for_each_entry_safe(area, next_area, &areas, list) {
+		list_del(&area->list);
+		kfree(area);
+	}
+
+	if (!wait_for_completion_timeout(&ebc->display_end, EBC_FRAME_TIMEOUT))
+		drm_err(drm, "Last frame timed out");
+
+	dma_unmap_single(dev, phase_handles[0], ctx->phase_size, DMA_TO_DEVICE);
+	dma_unmap_single(dev, phase_handles[1], ctx->phase_size, DMA_TO_DEVICE);
+
+	memcpy(ctx->prev, ctx->next, gray4_size);
+}
+
 static void rockchip_ebc_partial_refresh(struct rockchip_ebc *ebc,
 					 struct rockchip_ebc_ctx *ctx,
 					 dma_addr_t next_handle,
@@ -1466,7 +1539,8 @@ static void rockchip_ebc_refresh(struct rockchip_ebc *ebc,
 	 * NOTE: In direct mode, no mode bits are set.
 	 */
 	if (global_refresh) {
-		dsp_ctrl |= EBC_DSP_CTRL_DSP_LUT_MODE;
+		if (!direct_mode)
+			dsp_ctrl |= EBC_DSP_CTRL_DSP_LUT_MODE;
 	} else if (!direct_mode) {
 		epd_ctrl |= EBC_EPD_CTRL_DSP_THREE_WIN_MODE;
 		if (diff_mode)
