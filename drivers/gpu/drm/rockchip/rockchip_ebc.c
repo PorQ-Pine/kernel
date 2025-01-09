@@ -212,9 +212,13 @@ static bool direct_mode = false;
 module_param(direct_mode, bool, 0444);
 MODULE_PARM_DESC(direct_mode, "compute waveforms in software (software LUT)");
 
-static bool panel_reflection = true;
-module_param(panel_reflection, bool, 0644);
-MODULE_PARM_DESC(panel_reflection, "reflect the image horizontally");
+static bool reflect_y = false;
+module_param(reflect_y, bool, 0644);
+MODULE_PARM_DESC(reflect_y, "reflect the image vertically");
+
+static bool reflect_x = true;
+module_param(reflect_x, bool, 0644);
+MODULE_PARM_DESC(reflect_x, "reflect the image horizontally");
 
 static bool skip_reset = false;
 module_param(skip_reset, bool, 0444);
@@ -2020,9 +2024,7 @@ static bool rockchip_ebc_blit_fb_r4(const struct rockchip_ebc_ctx *ctx,
 				 const struct drm_rect *dst_clip,
 				 const void *vaddr,
 				 const struct drm_framebuffer *fb,
-				 const struct drm_rect *src_clip,
-				 int adjust_x1,
-				 int adjust_x2
+				 const struct drm_rect *src_clip
 				 )
 {
 	unsigned int dst_pitch = ctx->gray4_pitch;
@@ -2053,72 +2055,58 @@ static bool rockchip_ebc_blit_fb_xrgb8888(const struct rockchip_ebc_ctx *ctx,
 				 const struct drm_rect *dst_clip,
 				 const void *vaddr,
 				 const struct drm_framebuffer *fb,
-				 const struct drm_rect *src_clip,
-				 int adjust_x1,
-				 int adjust_x2
+				 const struct drm_rect *src_clip
 				 )
 {
 	unsigned int dst_pitch = ctx->gray4_pitch;
 	unsigned int src_pitch = fb->pitches[0];
-	unsigned int start_x, x, y;
+	unsigned int src_start_x, x, y;
 	const void *src;
 	u8 changed = 0;
 	int delta_x;
 	void *dst;
-	int test1, test2;
-
-	unsigned int delta_y;
-	unsigned int start_y;
-	unsigned int end_y2;
-	pr_debug("%s starting", __func__);
+	u8 dither_low, dither_high;
 
 	// original pattern
-	/* int pattern[4][4] = { */
+	/* int dither_pattern[4][4] = { */
 	/* 	{0, 8, 2, 10}, */
 	/* 	{12, 4, 14, 6}, */
 	/* 	{3, 11, 1,  9}, */
 	/* 	{15, 7, 13, 5}, */
 	/* }; */
-	int pattern[4][4] = {
+	int dither_pattern[4][4] = {
 		{7, 8, 2, 10},
 		{12, 4, 14, 6},
 		{3, 11, 1,  9},
 		{15, 7, 13, 5},
 	};
 
-	u8 dither_low = bw_dither_invert ? 15 : 0;
-	u8 dither_high = bw_dither_invert ? 0 : 15;
+	pr_debug("%s starting", __func__);
+
+	dither_low = bw_dither_invert ? 15 : 0;
+	dither_high = bw_dither_invert ? 0 : 15;
 	/* printk(KERN_INFO "dither low/high: %u %u bw_mode: %i\n", dither_low, dither_high, bw_mode); */
 
-	// -2 because we need to go to the beginning of the last line
-	start_y = panel_reflection ? src_clip->y1 : src_clip->y2 - 2;
-	delta_y = panel_reflection ? 1: -1;
+	// Scan out: row in src order
+	// possibly decrease x1 by one for Y4 alignment
+	src_start_x = src_clip->x1 ^ (src_clip->x1 & 1);
+	delta_x = reflect_x ? -1 : 1;
 
-	if (panel_reflection)
-		end_y2 = src_clip->y2;
-	else
-		end_y2 = src_clip->y2 - 1;
+	dst = ctx->final_atomic_update + (reflect_y ? dst_clip->y2 - 1 : dst_clip->y1) * dst_pitch
+		+ (reflect_x ? (dst_clip->x2 - 1) / 2: dst_clip->x1 / 2);
+	src = vaddr + src_clip->y1 * src_pitch + src_start_x * fb->format->cpp[0];
 
-	delta_x = panel_reflection ? -1 : 1;
-	start_x = panel_reflection ? src_clip->x2 - 1 : src_clip->x1;
-	// depending on the direction we must either save the first or the last bit
-	test1 = panel_reflection ? adjust_x1 : adjust_x2;
-	test2 = panel_reflection ? adjust_x2 : adjust_x1;
-
-	dst = ctx->final_atomic_update + dst_clip->y1 * dst_pitch + dst_clip->x1 / 2;
-	src = vaddr + start_y * src_pitch + start_x * fb->format->cpp[0];
-
-	for (y = src_clip->y1; y < end_y2; y++) {
+	for (y = src_clip->y1; y < src_clip->y2; y++) {
 		const u32 *sbuf = src;
 		u8 *dbuf = dst;
 
-		for (x = src_clip->x1; x < src_clip->x2; x += 2) {
+		// Y4 alignment in dst buffer
+		for (x = src_start_x; x < src_clip->x2; x += 2) {
 			u32 rgb0, rgb1;
 			u8 gray;
-			u8 tmp_pixel;
 
-			rgb0 = *sbuf; sbuf += delta_x;
-			rgb1 = *sbuf; sbuf += delta_x;
+			rgb0 = *sbuf++;
+			rgb1 = *sbuf++;
 
 			/* Truncate the RGB values to 5 bits each. */
 			rgb0 &= 0x00f8f8f8U; rgb1 &= 0x00f8f8f8U;
@@ -2130,21 +2118,13 @@ static bool rockchip_ebc_blit_fb_xrgb8888(const struct rockchip_ebc_ctx *ctx,
 			rgb0 >>= 28;
 			rgb1 >>= 28;
 
-			if (x == src_clip->x1 && (test1 == 1)) {
-				// rgb0 should be filled with the content of the src pixel here
-				// keep lower 4 bits
-				// I'm not sure how to directly read only one byte from the u32
-				// pointer dbuf ...
-				tmp_pixel = *dbuf & 0b00001111;
-				rgb0 = tmp_pixel;
+			if (x < src_clip->x1) {
+				// rgb0 should be filled with the content of the dst pixel here
+				rgb0 = (*dbuf & (reflect_x ? 0xf0 : 0x0f)) >> (reflect_x ? 4 : 0);
 			}
-			if (x == src_clip->x2 && (test2 == 1)) {
+			if (x == src_clip->x2 - 1) {
 				// rgb1 should be filled with the content of the dst pixel we
-				// want to keep here
-				// keep 4 higher bits
-				tmp_pixel = *dbuf & 0b11110000;
-				// shift by four bits to the lower bits
-				rgb1 = tmp_pixel >> 4;
+				rgb1 = (*dbuf & (reflect_x ? 0x0f : 0xf0)) >> (reflect_x ? 0 : 4);
 			}
 
 			switch (bw_mode){
@@ -2155,13 +2135,13 @@ static bool rockchip_ebc_blit_fb_xrgb8888(const struct rockchip_ebc_ctx *ctx,
 					/* } */
 					// bw + dithering
 					// convert to black and white
-					if (rgb0 >= pattern[x & 3][y & 3]){
+					if (rgb0 >= dither_pattern[x & 3][y & 3]){
 						rgb0 = dither_high;
 					} else {
 						rgb0 = dither_low;
 					}
 
-					if (rgb1 >= pattern[(x + 1) & 3][y & 3]){
+					if (rgb1 >= dither_pattern[(x + 1) & 3][y & 3]){
 						rgb1 = dither_high;
 					} else {
 						rgb1 = dither_low;
@@ -2208,16 +2188,17 @@ static bool rockchip_ebc_blit_fb_xrgb8888(const struct rockchip_ebc_ctx *ctx,
 					}
 			}
 
-			gray = rgb0 | rgb1 << 4;
+			gray = reflect_x ? (rgb0 << 4 | rgb1) : (rgb1 << 4 | rgb0);
 			changed |= gray ^ *dbuf;
-			*dbuf++ = gray;
+			*dbuf = gray;
+			dbuf += delta_x;
 		}
 
-		dst += dst_pitch;
-		if (panel_reflection)
-			src += src_pitch;
+		src += src_pitch;
+		if (reflect_y)
+			dst -= dst_pitch;
 		else
-			src -= src_pitch;
+			dst += dst_pitch;
 	}
 
 	return !!changed;
@@ -2257,8 +2238,6 @@ static void rockchip_ebc_plane_atomic_update(struct drm_plane *plane,
 	list_for_each_entry_safe(area, next_area, &ebc_plane_state->areas, list) {
 		struct drm_rect *dst_clip = &area->clip;
 		struct drm_rect src_clip = area->clip;
-		int adjust_x1;
-		int adjust_x2;
 		bool clip_changed_fb;
 		/* printk(KERN_INFO "[rockchip-ebc]    checking from list: (" DRM_RECT_FMT ") \n", */
 		/* 	DRM_RECT_ARG(&area->clip)); */
@@ -2266,32 +2245,13 @@ static void rockchip_ebc_plane_atomic_update(struct drm_plane *plane,
 		/* Convert from plane coordinates to CRTC coordinates. */
 		drm_rect_translate(dst_clip, translate_x, translate_y);
 
-		/* Adjust the clips to always process full bytes (2 pixels). */
-		/* NOTE: in direct mode, the minimum block size is 4 pixels. */
-		if (direct_mode)
-			adjust_x1 = dst_clip->x1 & 3;
-		else
-			adjust_x1 = dst_clip->x1 & 1;
-
-		dst_clip->x1 -= adjust_x1;
-		src_clip.x1  -= adjust_x1;
-
-		if (direct_mode)
-			adjust_x2 = ((dst_clip->x2 + 3) ^ 3) & 3;
-		else
-			adjust_x2 = dst_clip->x2 & 1;
-
-		dst_clip->x2 += adjust_x2;
-		src_clip.x2  += adjust_x2;
-
-		if (panel_reflection) {
+		if (reflect_x) {
 			int x1 = dst_clip->x1, x2 = dst_clip->x2;
 
 			dst_clip->x1 = plane_state->dst.x2 - x2;
 			dst_clip->x2 = plane_state->dst.x2 - x1;
 		}
-		else
-		{
+		if (reflect_y) {
 			// "normal" mode
 			// flip y coordinates
 			int y1 = dst_clip->y1, y2 = dst_clip->y2;
@@ -2304,13 +2264,11 @@ static void rockchip_ebc_plane_atomic_update(struct drm_plane *plane,
 			switch(plane_state->fb->format->format){
 				case DRM_FORMAT_XRGB8888:
 					clip_changed_fb = rockchip_ebc_blit_fb_xrgb8888(
-							ctx, dst_clip, vaddr, plane_state->fb, &src_clip,
-							adjust_x1, adjust_x2);
+							ctx, dst_clip, vaddr, plane_state->fb, &src_clip);
 					break;
 				case DRM_FORMAT_R4:
 					clip_changed_fb = rockchip_ebc_blit_fb_r4(
-							ctx, dst_clip, vaddr, plane_state->fb, &src_clip,
-							adjust_x1, adjust_x2);
+							ctx, dst_clip, vaddr, plane_state->fb, &src_clip);
 					break;
 			}
 			// the counter should only reach 0 here, -1 can only be externally set
@@ -2323,12 +2281,6 @@ static void rockchip_ebc_plane_atomic_update(struct drm_plane *plane,
 			/* printk(KERN_INFO "[rockchip-ebc] atomic update: not blitting: %i\n", limit_fb_blits); */
 			clip_changed_fb = false;
 		}
-
-		// reverse coordinates
-		dst_clip->x1 += adjust_x1;
-		src_clip.x1  += adjust_x1;
-		dst_clip->x2 -= adjust_x2;
-		src_clip.x2  -= adjust_x2;
 
 		if (!clip_changed_fb) {
 			drm_dbg(plane->dev, "area %p (" DRM_RECT_FMT ") <= (" DRM_RECT_FMT ") skipped\n",
