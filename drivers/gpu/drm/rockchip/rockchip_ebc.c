@@ -863,8 +863,8 @@ static bool rockchip_ebc_schedule_area(struct list_head *areas,
 
 	list_for_each_entry(other, areas, list) {
 		struct drm_rect intersection;
-		u32 other_end;
 		/* printk(KERN_INFO "    test other area: %i-%i %i-%i (beginning at: %i)\n", other->clip.x1, other->clip.x2, other->clip.y1, other->clip.y2, other->frame_begin); */
+		u32 other_end_excl;
 
 		/* Only consider areas before this one in the list. */
 		if (other == area){
@@ -873,26 +873,27 @@ static bool rockchip_ebc_schedule_area(struct list_head *areas,
 		}
 
 		/* Skip areas that finish refresh before this area begins. */
-		other_end = other->frame_begin + num_phases;
-		if (other_end <= frame_begin){
 			/* printk(KERN_INFO "        other finishes before: %i %i\n", other_end, frame_begin); */
+		other_end_excl = other->frame_begin + num_phases;
+		if (other_end_excl <= frame_begin){
 			continue;
 		}
 
 		/* If there is no collision, the areas are independent. */
-		intersection = area->clip;
-		if (!drm_rect_intersect(&intersection, &other->clip)){
 			/* printk(KERN_INFO "        no collision\n"); */
+		if (!drm_rect_overlap(&area->clip, &other->clip)){
 			continue;
 		}
 
+		intersection = area->clip;
+
 		/* If the other area already started, wait until it finishes. */
 		if (other->frame_begin < current_frame) {
-			frame_begin = max(frame_begin, other_end + 1);
 			/* printk(KERN_INFO "        other already started, setting to %i (%i, %i)\n", frame_begin, num_phases, other_end); */
+			frame_begin = max(frame_begin, other_end_excl);
 			if (frame_begin < do_not_start_before_frame){
 				/* pr_info("      NOTE: dead zone, resetting to: %i", do_not_start_before_frame + 1); */
-				frame_begin = do_not_start_before_frame + 1;
+				frame_begin = do_not_start_before_frame;
 
 			}
 
@@ -901,9 +902,9 @@ static bool rockchip_ebc_schedule_area(struct list_head *areas,
 			// which is overlapping. The overlapping one will be scheduled for
 			// later, but the other three should start immediately.
 
-			// if the area is equal to the clip, continue
-			if (drm_rect_equals(&area->clip, &intersection)){
 				/* printk(KERN_INFO "        intersection completely contains area\n"); */
+			// if other clip hides the current clip, continue
+			if (!drm_rect_intersect(&intersection, &other->clip)) {
 				continue;
 			}
 
@@ -921,7 +922,7 @@ static bool rockchip_ebc_schedule_area(struct list_head *areas,
 		 * If the other area has not started yet, and completely
 		 * contains this area, then this area is redundant.
 		 */
-		if (drm_rect_equals(&area->clip, &intersection)) {
+		if (!drm_rect_intersect(&intersection, &other->clip)) {
 			drm_dbg(drm, "area %p (" DRM_RECT_FMT ") dropped, inside " DRM_RECT_FMT "\n",
 				area, DRM_RECT_ARG(&area->clip), DRM_RECT_ARG(&other->clip));
 			/* printk(KERN_INFO "    dropping\n"); */
@@ -934,13 +935,19 @@ static bool rockchip_ebc_schedule_area(struct list_head *areas,
 		if (frame_begin > other->frame_begin){
 			// for some reason we need to begin later than the other region,
 			// which forces us to wait for the region
-			frame_begin = other_end + 1;
 			/* pr_info(     "we need to wait"); */
+			frame_begin = max(frame_begin, other_end_excl);
+			frame_begin = max(frame_begin, do_not_start_before_frame);
 		} else {
-			// they can begin together
-			frame_begin = other->frame_begin;
-			do_not_start_before_frame = max(other_end, do_not_start_before_frame);
-			/* pr_info(     "begin together"); */
+			if (other->frame_begin >= do_not_start_before_frame) {
+				// they can begin together
+				frame_begin = other->frame_begin;
+				do_not_start_before_frame = other_end_excl;
+				/* pr_info(     "begin together"); */
+			} else {
+				frame_begin = max(other_end_excl, do_not_start_before_frame);
+				/* pr_info(     "we need to wait 2"); */
+			}
 		}
 
 		/* printk(KERN_INFO "    setting to: %i\n", frame_begin); */
