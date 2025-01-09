@@ -1250,9 +1250,6 @@ static void rockchip_ebc_partial_refresh(struct rockchip_ebc *ebc,
 		bool sync_prev = false;
 		int split_counter = 0;
 
-		// now the CPU is allowed to change the phase buffer
-		dma_sync_single_for_cpu(dev, phase_handle, ctx->phase_size, DMA_TO_DEVICE);
-
 		/* Move the queued damage areas to the local list. */
 		if (frame == 0){
 			spin_lock(&ctx->queue_lock);
@@ -1293,9 +1290,6 @@ static void rockchip_ebc_partial_refresh(struct rockchip_ebc *ebc,
 				local_area_count += (u64) (
 					area->clip.x2 - area->clip.x1) *
 					(area->clip.y2 - area->clip.y1);
-				// only sync to cpu once
-				if (!sync_next)
-					dma_sync_single_for_cpu(dev, next_handle, gray4_size, DMA_TO_DEVICE);
 				rockchip_ebc_blit_pixels(ctx, ctx->next,
 							 ctx->final,
 							 &area->clip);
@@ -1332,13 +1326,10 @@ static void rockchip_ebc_partial_refresh(struct rockchip_ebc *ebc,
 			 * also ensures both phase buffers get set to 0xff.
 			 */
 			if (frame_delta > last_phase) {
-				dma_sync_single_for_cpu(dev, prev_handle, gray4_size, DMA_TO_DEVICE);
-				dma_sync_single_for_cpu(dev, next_handle, gray4_size, DMA_TO_DEVICE);
 				rockchip_ebc_blit_pixels(ctx, ctx->prev,
 							 ctx->next,
 							 &area->clip);
 				sync_prev = true;
-				sync_next = true;
 
 				drm_dbg(drm, "area %p (" DRM_RECT_FMT ") finished on %u\n",
 					area, DRM_RECT_ARG(&area->clip), frame);
@@ -1351,10 +1342,10 @@ static void rockchip_ebc_partial_refresh(struct rockchip_ebc *ebc,
 			}
 		}
 
-		if (sync_next)
+		if (sync_next && !direct_mode)
 			dma_sync_single_for_device(dev, next_handle,
 						   gray4_size, DMA_TO_DEVICE);
-		if (sync_prev)
+		if (sync_prev  && !direct_mode)
 			dma_sync_single_for_device(dev, prev_handle,
 						   gray4_size, DMA_TO_DEVICE);
 		dma_sync_single_for_device(dev, phase_handle, ctx->phase_size, DMA_TO_DEVICE);
@@ -1417,7 +1408,7 @@ static void rockchip_ebc_partial_refresh(struct rockchip_ebc *ebc,
 		};
 	}
 	dma_unmap_single(dev, phase_handles[0], ctx->phase_size, DMA_TO_DEVICE);
-	/* dma_unmap_single(dev, phase_handles[1], ctx->phase_size, DMA_TO_DEVICE); */
+	dma_unmap_single(dev, phase_handles[1], ctx->phase_size, DMA_TO_DEVICE);
 
 	ctx->area_count += local_area_count;
 
@@ -1553,19 +1544,22 @@ static void rockchip_ebc_refresh(struct rockchip_ebc *ebc,
 			   EBC_DSP_CTRL_DSP_LUT_MODE,
 			   dsp_ctrl);
 
-	next_handle = dma_map_single(dev, ctx->next, ctx->gray4_size, DMA_TO_DEVICE);
-	if (dma_mapping_error(dev, next_handle)) {
-		drm_err(drm, "next_handle dma mapping error");
-	}
-	prev_handle = dma_map_single(dev, ctx->prev, ctx->gray4_size, DMA_TO_DEVICE);
-	if (dma_mapping_error(dev, prev_handle)) {
-		drm_err(drm, "prev_handle dma mapping error");
-	}
+	if (!direct_mode)
+	{
+		next_handle = dma_map_single(dev, ctx->next, ctx->gray4_size, DMA_TO_DEVICE);
+		if (dma_mapping_error(dev, next_handle)) {
+			drm_err(drm, "next_handle dma mapping error");
+		}
+		prev_handle = dma_map_single(dev, ctx->prev, ctx->gray4_size, DMA_TO_DEVICE);
+		if (dma_mapping_error(dev, prev_handle)) {
+			drm_err(drm, "prev_handle dma mapping error");
+		}
 
-	regmap_write(ebc->regmap, EBC_WIN_MST1,
-		     next_handle);
-	regmap_write(ebc->regmap, EBC_WIN_MST0,
-		     prev_handle);
+		regmap_write(ebc->regmap, EBC_WIN_MST1,
+					 next_handle);
+		regmap_write(ebc->regmap, EBC_WIN_MST0,
+					 prev_handle);
+	}
 
 	/* printk(KERN_INFO "[rockchip_ebc] ebc_refresh"); */
 	if (global_refresh)
@@ -1573,8 +1567,11 @@ static void rockchip_ebc_refresh(struct rockchip_ebc *ebc,
 	else
 		rockchip_ebc_partial_refresh(ebc, ctx, next_handle, prev_handle);
 
-	dma_unmap_single(dev, next_handle, ctx->gray4_size, DMA_TO_DEVICE);
-	dma_unmap_single(dev, prev_handle, ctx->gray4_size, DMA_TO_DEVICE);
+	if (!direct_mode)
+	{
+		dma_unmap_single(dev, next_handle, ctx->gray4_size, DMA_TO_DEVICE);
+		dma_unmap_single(dev, prev_handle, ctx->gray4_size, DMA_TO_DEVICE);
+	}
 
 	/* Drive the output pins low once the refresh is complete. */
 	regmap_write(ebc->regmap, EBC_DSP_START,
