@@ -156,6 +156,7 @@ MODULE_FIRMWARE(EBC_OFFCONTENT);
 struct rockchip_ebc {
 	struct clk			*dclk;
 	struct clk			*hclk;
+	struct clk			*cpll_333m;
 	struct completion		display_end;
 	struct drm_crtc			crtc;
 	struct drm_device		drm;
@@ -1755,6 +1756,39 @@ static inline struct rockchip_ebc *crtc_to_ebc(struct drm_crtc *crtc)
 	return container_of(crtc, struct rockchip_ebc, crtc);
 }
 
+static int rockchip_ebc_set_dclk(struct rockchip_ebc *ebc,
+					  const struct drm_display_mode *mode)
+{
+	int rate;
+
+	if (direct_mode) {
+		rate = clk_set_rate(ebc->cpll_333m, 33333334);
+		if (rate < 0)
+			return rate;
+		rate = clk_set_rate(ebc->dclk, 34000000);
+		return rate;
+	}
+
+	switch (dclk_select) {
+		case -1:
+			// TODO: consider adjusting cpll_333m
+			rate = clk_set_rate(ebc->dclk, mode->clock * 1000);
+			break;
+		case 0:
+			rate = clk_set_rate(ebc->dclk, 200000000);
+			break;
+		case 1:
+			rate = clk_set_rate(ebc->cpll_333m, 250000000);
+			if (rate < 0)
+				return rate;
+			rate = clk_set_rate(ebc->dclk, 250000000);
+			break;
+		default:
+			rate = -EINVAL;
+	}
+	return rate;
+}
+
 static void rockchip_ebc_crtc_mode_set_nofb(struct drm_crtc *crtc)
 {
 	struct rockchip_ebc *ebc = crtc_to_ebc(crtc);
@@ -1821,14 +1855,8 @@ static void rockchip_ebc_crtc_mode_set_nofb(struct drm_crtc *crtc)
 	hsync_width = sdck.hsync_end - sdck.hsync_start;
 	vsync_width = mode.vsync_end - mode.vsync_start;
 
-	if (direct_mode)
-		clk_set_rate(ebc->dclk, 34000000);
-	else if (dclk_select == -1)
-		clk_set_rate(ebc->dclk, mode.clock * 1000);
-	else if (dclk_select == 0)
-		clk_set_rate(ebc->dclk, 200000000);
-	else if (dclk_select == 1)
-		clk_set_rate(ebc->dclk, 250000000);
+	// TODO: error checking
+	rockchip_ebc_set_dclk(ebc, &mode);
 
 	/* Display timings in ebc hardware:
 	+        * GD_ST
@@ -1926,17 +1954,7 @@ static int rockchip_ebc_crtc_atomic_check(struct drm_crtc *crtc,
 	if (crtc_state->enable) {
 		struct drm_display_mode *mode = &crtc_state->adjusted_mode;
 
-		long rate = 200000000;
-		if (direct_mode)
-			rate = 34000000;
-		else if (dclk_select == -1)
-			rate = mode->clock * 1000;
-		else if (dclk_select == 0)
-			rate = 200000000;
-		else if (dclk_select == 1)
-			rate = 250000000;
-
-		rate = clk_round_rate(ebc->dclk, rate);
+		int rate = rockchip_ebc_set_dclk(ebc, mode);
 		if (rate < 0)
 			return rate;
 		mode->clock = rate / 1000;
@@ -2802,6 +2820,11 @@ static int rockchip_ebc_probe(struct platform_device *pdev)
 	if (IS_ERR(ebc->hclk))
 		return dev_err_probe(dev, PTR_ERR(ebc->hclk),
 				     "Failed to get hclk\n");
+
+	ebc->cpll_333m = devm_clk_get(dev, "cpll_333m");
+	if (IS_ERR(ebc->cpll_333m))
+		return dev_err_probe(dev, PTR_ERR(ebc->cpll_333m),
+				     "Failed to get cpll_333m\n");
 
 	ebc->temperature_channel = devm_iio_channel_get(dev, NULL);
 	if (IS_ERR(ebc->temperature_channel))
