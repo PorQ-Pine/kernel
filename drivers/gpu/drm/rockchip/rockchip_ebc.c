@@ -1228,7 +1228,7 @@ static void rockchip_ebc_partial_refresh(struct rockchip_ebc *ebc,
 	ktime_t times[100];
 	int time_index = 0;
 	s64 duration;
-	u32 min_frame_delay = 1000;
+	u32 min_frame_delay = 1000000;
 	u32 max_frame_delay = 0;
 
 	dma_addr_t phase_handles[2];
@@ -1241,8 +1241,7 @@ static void rockchip_ebc_partial_refresh(struct rockchip_ebc *ebc,
 	/* 	drm_err(drm, "phase_handles[0] dma mapping error"); */
 	/* } */
 
-	times[time_index] = ktime_get();
-	time_index++;
+	times[time_index++] = ktime_get();
 	for (frame = 0;; frame++) {
 		/* do not swap phase buffers ... for now */
 		u8 *phase_buffer = ctx->phase[0];
@@ -1423,17 +1422,17 @@ static void rockchip_ebc_partial_refresh(struct rockchip_ebc *ebc,
 	ctx->area_count += local_area_count;
 
 	// print the min/max execution times from within the first 100 frames
-	for (int i=1; i <= min(time_index - 1, 99); i++){
-		duration = ktime_ms_delta(times[i], times[i-1]);
+	for (int i=1; i < min(time_index, 100); i++){
+		duration = ktime_us_delta(times[i], times[i-1]);
 		if (duration > max_frame_delay)
-			if (duration <= 100)
+			if (duration <= 100000)
 					max_frame_delay = duration;
 		if (duration < min_frame_delay)
-			if (duration <= 100)
+			if (duration <= 100000)
 				min_frame_delay = duration;
-		//pr_info("ebc: frame %i took %llu ms", i, duration);
+		pr_debug("ebc: frame %i took %llu us", i, duration);
 	}
-	pr_debug("ebc: min/max frame durations: %u/%u [ms]", min_frame_delay, max_frame_delay);
+	pr_debug("ebc: min/max frame durations: %u/%u [us]", min_frame_delay, max_frame_delay);
 
 }
 
