@@ -1819,7 +1819,9 @@ static void rockchip_ebc_crtc_mode_set_nofb(struct drm_crtc *crtc)
 	hsync_width = sdck.hsync_end - sdck.hsync_start;
 	vsync_width = mode.vsync_end - mode.vsync_start;
 
-	if (dclk_select == -1)
+	if (direct_mode)
+		clk_set_rate(ebc->dclk, 34000000);
+	else if (dclk_select == -1)
 		clk_set_rate(ebc->dclk, mode.clock * 1000);
 	else if (dclk_select == 0)
 		clk_set_rate(ebc->dclk, 200000000);
@@ -1853,7 +1855,7 @@ static void rockchip_ebc_crtc_mode_set_nofb(struct drm_crtc *crtc)
 	regmap_write(ebc->regmap, EBC_DSP_CTRL,
 		     /* no swap */
 		     EBC_DSP_CTRL_DSP_SWAP_MODE(bus_16bit ? 2 : 3) |
-		     EBC_DSP_CTRL_DSP_SDCLK_DIV(pixels_per_sdck - 1));
+		     EBC_DSP_CTRL_DSP_SDCLK_DIV(direct_mode ? 0 : pixels_per_sdck - 1));
 	regmap_write(ebc->regmap, EBC_DSP_HTIMING0,
 		     EBC_DSP_HTIMING0_DSP_HTOTAL(sdck.htotal) |
 		     /* sync end == sync width */
@@ -1923,7 +1925,9 @@ static int rockchip_ebc_crtc_atomic_check(struct drm_crtc *crtc,
 		struct drm_display_mode *mode = &crtc_state->adjusted_mode;
 
 		long rate = 200000000;
-		if (dclk_select == -1)
+		if (direct_mode)
+			rate = 34000000;
+		else if (dclk_select == -1)
 			rate = mode->clock * 1000;
 		else if (dclk_select == 0)
 			rate = 200000000;
