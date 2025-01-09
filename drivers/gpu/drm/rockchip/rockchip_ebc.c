@@ -1184,7 +1184,7 @@ static void rockchip_ebc_global_refresh_direct(struct rockchip_ebc *ebc,
 		u8 *phase_buffer = ctx->phase[phase % 2];
 		dma_addr_t phase_handle = phase_handles[phase % 2];
 
-		rockchip_ebc_blit_direct(ctx, phase_buffer, phase, &ebc->lut, &screen_clip, false);
+		rockchip_ebc_blit_direct(ctx, phase_buffer, phase >= last_phase ? 0xff : phase, &ebc->lut, &screen_clip, false);
 		dma_sync_single_for_device(dev, phase_handle, ctx->phase_size, DMA_TO_DEVICE);
 
 		if (phase > 0 && !wait_for_completion_timeout(&ebc->display_end,
@@ -1196,6 +1196,8 @@ static void rockchip_ebc_global_refresh_direct(struct rockchip_ebc *ebc,
 		regmap_write(ebc->regmap, EBC_DSP_START, ebc->dsp_start | EBC_DSP_START_DSP_FRM_START);
 		pr_debug("tcon started on frame %d", phase);
 	}
+	// Ensure both buffers are set to neutral polarity
+	memset(ctx->phase[(last_phase + 1) % 2], 0, ctx->phase_size);
 
 	// while we wait for the refresh, delete all scheduled areas
 	list_for_each_entry_safe(area, next_area, &areas, list) {
