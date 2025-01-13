@@ -297,7 +297,7 @@
 		assigned-clock-rates = <32768>,
 				<500000000>, <400000000>,
 				 <1200000000>, <200000000>,
-				 <300000000>, <300000000>,
+				 <300000000>, <250000000>,
 				 <300000000>, <300000000>,
 				 <300000000>, <33333334>;
 		// stronger artifacting, I suspend instabilities due to too high clock frequencies
