@@ -2163,7 +2163,7 @@ static bool rockchip_ebc_blit_fb_r4(const struct rockchip_ebc_ctx *ctx,
 }
 
 static bool rockchip_ebc_blit_fb_xrgb8888(const struct rockchip_ebc_ctx *ctx,
-				 const struct drm_rect *dst_clip,
+				 struct drm_rect *dst_clip,
 				 const void *vaddr,
 				 const struct drm_framebuffer *fb,
 				 const struct drm_rect *src_clip
@@ -2172,6 +2172,8 @@ static bool rockchip_ebc_blit_fb_xrgb8888(const struct rockchip_ebc_ctx *ctx,
 	unsigned int dst_pitch = ctx->gray4_pitch;
 	unsigned int src_pitch = fb->pitches[0];
 	unsigned int src_start_x, x, y;
+	int x_changed_min = -1, x_changed_max = -1;
+	int y_changed_min = -1, y_changed_max = -1;
 	u8 refl_y4_mask_even = reflect_x ? y4_mask_odd : y4_mask_even;
 	u8 refl_y4_mask_odd = reflect_x ? y4_mask_even : y4_mask_odd;
 	u8 refl_y4_shift_even = reflect_x ? y4_shift_odd : y4_shift_even;
@@ -2306,7 +2308,19 @@ static bool rockchip_ebc_blit_fb_xrgb8888(const struct rockchip_ebc_ctx *ctx,
 			}
 
 			gray = rgb0 << refl_y4_shift_even | rgb1 << refl_y4_shift_odd;
-			changed |= gray ^ *dbuf;
+			changed = gray ^ *dbuf;
+			if (changed) {
+				y_changed_max = y;
+				if (y_changed_min == -1)
+					y_changed_min = y;
+				int x_min, x_max;
+				x_min = changed & dst_x_mask_src_left ? x : x + 1;
+				x_max = changed & dst_x_mask_src_right ? x + 1 : x;
+				if (x_changed_min == -1 || x_changed_min > x_min)
+					x_changed_min = x_min;
+				if (x_changed_max < x_max)
+					x_changed_max = x_max;
+			}
 			*dbuf = gray;
 			dbuf += delta_x;
 		}
@@ -2317,8 +2331,31 @@ static bool rockchip_ebc_blit_fb_xrgb8888(const struct rockchip_ebc_ctx *ctx,
 		else
 			dst += dst_pitch;
 	}
+	pr_debug("blitted original dst_clip %d,%d-%d,%d with changed %d,%d-%d,%d",
+		dst_clip->x1, dst_clip->y1, dst_clip->x2, dst_clip->y2,
+		x_changed_min, y_changed_min, x_changed_max + 1, y_changed_max + 1);
+	if (y_changed_min != -1) {
+		if (reflect_y) {
+			dst_clip->y1 += src_clip->y2 - y_changed_max - 1;
+			dst_clip->y2 -= y_changed_min - src_clip->y1;
+		} else {
+			dst_clip->y1 += y_changed_min - src_clip->y1;
+			dst_clip->y2 -= src_clip->y2 - y_changed_max - 1;
+		}
+		if (reflect_x) {
+			dst_clip->x1 += src_clip->x2 - x_changed_max - 1;
+			dst_clip->x2 -= x_changed_min - src_clip->x1;
+		} else {
+			dst_clip->x1 += x_changed_min - src_clip->x1;
+			dst_clip->x2 -= src_clip->x2 - x_changed_max - 1;
+		}
+	} else {
+		dst_clip->x1 = dst_clip->x2 = dst_clip->y1 = dst_clip->y2 = 0;
+	}
+	pr_debug("now dst_clip %d,%d %d %d",
+		dst_clip->x1, dst_clip->y1, dst_clip->x2, dst_clip->y2);
 
-	return !!changed;
+	return y_changed_min != -1;
 }
 
 static void rockchip_ebc_plane_atomic_update(struct drm_plane *plane,
