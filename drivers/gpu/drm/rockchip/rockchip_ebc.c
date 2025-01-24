@@ -313,6 +313,11 @@ MODULE_PARM_DESC(hskew_override, "Override hskew value");
 
 DEFINE_DRM_GEM_FOPS(rockchip_ebc_fops);
 
+const u8 y4_mask_even = 0x0f;
+const unsigned int y4_shift_even = 0;
+const u8 y4_mask_odd = 0xf0;
+const unsigned int y4_shift_odd = 4;
+
 static int ioctl_trigger_global_refresh(struct drm_device *dev, void *data,
 		struct drm_file *file_priv)
 {
@@ -2167,6 +2172,10 @@ static bool rockchip_ebc_blit_fb_xrgb8888(const struct rockchip_ebc_ctx *ctx,
 	unsigned int dst_pitch = ctx->gray4_pitch;
 	unsigned int src_pitch = fb->pitches[0];
 	unsigned int src_start_x, x, y;
+	u8 refl_y4_mask_even = reflect_x ? y4_mask_odd : y4_mask_even;
+	u8 refl_y4_mask_odd = reflect_x ? y4_mask_even : y4_mask_odd;
+	u8 refl_y4_shift_even = reflect_x ? y4_shift_odd : y4_shift_even;
+	u8 refl_y4_shift_odd = reflect_x ? y4_shift_even : y4_shift_odd;
 	const void *src;
 	u8 changed = 0;
 	int delta_x;
@@ -2228,11 +2237,11 @@ static bool rockchip_ebc_blit_fb_xrgb8888(const struct rockchip_ebc_ctx *ctx,
 
 			if (x < src_clip->x1) {
 				// rgb0 should be filled with the content of the dst pixel here
-				rgb0 = (*dbuf & (reflect_x ? 0xf0 : 0x0f)) >> (reflect_x ? 4 : 0);
+				rgb0 = (*dbuf & refl_y4_mask_even) >> refl_y4_shift_even;
 			}
 			if (x == src_clip->x2 - 1) {
 				// rgb1 should be filled with the content of the dst pixel we
-				rgb1 = (*dbuf & (reflect_x ? 0x0f : 0xf0)) >> (reflect_x ? 0 : 4);
+				rgb1 = (*dbuf & refl_y4_mask_odd) >> refl_y4_shift_odd;
 			}
 
 			switch (bw_mode){
@@ -2296,7 +2305,7 @@ static bool rockchip_ebc_blit_fb_xrgb8888(const struct rockchip_ebc_ctx *ctx,
 					}
 			}
 
-			gray = reflect_x ? (rgb0 << 4 | rgb1) : (rgb1 << 4 | rgb0);
+			gray = rgb0 << refl_y4_shift_even | rgb1 << refl_y4_shift_odd;
 			changed |= gray ^ *dbuf;
 			*dbuf = gray;
 			dbuf += delta_x;
