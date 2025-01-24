@@ -6,6 +6,7 @@
 
 #include <linux/module.h>
 #include <linux/types.h>
+#include <drm/drm_rect.h>
 #include "rockchip_ebc.h"
 
 #include "rockchip_ebc_blit_neon.h"

@@ -59,4 +59,17 @@ struct rockchip_ebc_ctx {
 	u64 area_count;
 };
 
+/**
+ * struct rockchip_ebc_area - describes a damaged area of the display
+ *
+ * @list: Used to put this area in the state/context/refresh thread list
+ * @clip: The rectangular clip of this damage area
+ * @frame_begin: The frame number when this damage area starts being refreshed
+ */
+struct rockchip_ebc_area {
+	struct list_head		list;
+	struct drm_rect			clip;
+	u32				frame_begin;
+};
+
 #endif /* _ROCKCHIP_EBC_H */

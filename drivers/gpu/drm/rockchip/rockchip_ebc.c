@@ -414,19 +414,6 @@ static const struct drm_mode_config_funcs rockchip_ebc_mode_config_funcs = {
 	.atomic_commit		= drm_atomic_helper_commit,
 };
 
-/**
- * struct rockchip_ebc_area - describes a damaged area of the display
- *
- * @list: Used to put this area in the state/context/refresh thread list
- * @clip: The rectangular clip of this damage area
- * @frame_begin: The frame number when this damage area starts being refreshed
- */
-struct rockchip_ebc_area {
-	struct list_head		list;
-	struct drm_rect			clip;
-	u32				frame_begin;
-};
-
 static void rockchip_ebc_ctx_free(struct rockchip_ebc_ctx *ctx)
 {
 	struct rockchip_ebc_area *area;
@@ -673,282 +660,6 @@ static void rockchip_ebc_global_refresh(struct rockchip_ebc *ebc,
 	// this was the first global refresh after resume, reset the variable
 	ebc->suspend_was_requested = 0;
 }
-
-/*
- * Returns true if the area was split, false otherwise
- */
-static int try_to_split_area(
-		struct list_head *areas,
-		struct rockchip_ebc_area *area,
-		struct rockchip_ebc_area *other,
-		int * split_counter,
-		struct rockchip_ebc_area **p_next_area,
-		struct drm_rect * intersection
-		){
-	int xmin, xmax, ymin, ymax, xcenter, ycenter;
-
-	bool no_xsplit = false;
-	bool no_ysplit = false;
-	bool split_both = true;
-
-	struct rockchip_ebc_area * item1;
-	struct rockchip_ebc_area * item2;
-	struct rockchip_ebc_area * item3;
-	struct rockchip_ebc_area * item4;
-
-	// we do not want to overhelm the refresh thread and limit us to a
-	// certain number of splits. The rest needs to wait
-	if (*split_counter >= split_area_limit)
-		return 0;
-
-
-	// for now, min size if 2x2
-	if ((area->clip.x2 - area->clip.x1 < 2) | (area->clip.y2 - area->clip.y1 < 2))
-		return 0;
-
-	// ok, we want to split this area and start with any partial areas
-	// that are not overlapping (well, let this be decided upon at the
-	// next outer loop - we delete this area so we need not to juggle
-	// around the four areas until we found the one that is actually
-	// overlapping)
-	xmin = area->clip.x1;
-	if (intersection->x1 > xmin)
-		xcenter = intersection->x1;
-	else
-		xcenter = intersection->x2;
-	xmax = area->clip.x2;
-
-	ymin = area->clip.y1;
-	if (intersection->y1 > ymin)
-		ycenter = intersection->y1;
-	else
-		ycenter = intersection->y2;
-	ymax = area->clip.y2;
-
-	if ((xmin == xcenter) | (xcenter == xmax)){
-		no_xsplit = true;
-		split_both = false;
-	}
-	if ((ymin == ycenter) | (ycenter == ymax)){
-		no_ysplit = true;
-		split_both = false;
-	}
-
-	// can we land here at all???
-	if (no_xsplit && no_ysplit)
-		return 0;
-
-	// we need four new rokchip_ebc_area entries that we splice into
-	// the list. Note that the currently next item shall be copied
-	// backwards because to prevent the outer list iteration from
-	// skipping over our newly created items.
-
-	item1 = kmalloc(sizeof(*item1), GFP_KERNEL);
-	if (!item1)
-		pr_info("EBC ERROR: kmalloc item1");
-	if (split_both || no_xsplit)
-		item2 = kmalloc(sizeof(*item2), GFP_KERNEL);
-	if (split_both || no_ysplit)
-		item3 = kmalloc(sizeof(*item3), GFP_KERNEL);
-	if (split_both)
-		item4 = kmalloc(sizeof(*item4), GFP_KERNEL);
-
-	// TODO: Error checking!!!!
-	/* if (!area) */
-	/* 	return -ENOMEM; */
-
-	if (no_xsplit)
-		xcenter = xmax;
-
-	if (no_ysplit)
-		ycenter = ymax;
-
-	if (list_is_last(&area->list, areas)){
-		list_add_tail(&item1->list, areas);
-		if (split_both || no_xsplit)
-			list_add_tail(&item2->list, areas);
-		if (split_both || no_ysplit)
-			list_add_tail(&item3->list, areas);
-		if (split_both)
-			list_add_tail(&item4->list, areas);
-	}
-	else{
-		if (split_both)
-			__list_add(&item4->list, &area->list, area->list.next);
-		if (split_both || no_ysplit)
-			__list_add(&item3->list, &area->list, area->list.next);
-		if (split_both || no_xsplit)
-			__list_add(&item2->list, &area->list, area->list.next);
-		__list_add(&item1->list, &area->list, area->list.next);
-	}
-	*p_next_area = item1;
-
-	// now fill the areas
-
-	// always
-	item1->frame_begin = EBC_FRAME_PENDING;
-	item1->clip.x1 = xmin;
-	item1->clip.x2 = xcenter;
-	item1->clip.y1 = ymin;
-	item1->clip.y2 = ycenter;
-
-	if (split_both || no_xsplit){
-		// no xsplit
-		item2->frame_begin = EBC_FRAME_PENDING;
-		item2->clip.x1 = xmin;
-		item2->clip.x2 = xcenter;
-		item2->clip.y1 = ycenter;
-		item2->clip.y2 = ymax;
-	}
-
-	if (split_both || no_ysplit){
-		// no ysplit
-		item3->frame_begin = EBC_FRAME_PENDING;
-		item3->clip.x1 = xcenter;
-		item3->clip.x2 = xmax;
-		item3->clip.y1 = ymin;
-		item3->clip.y2 = ycenter;
-	}
-
-	if (split_both){
-		// both splits
-		item4->frame_begin = EBC_FRAME_PENDING;
-		item4->clip.x1 = xcenter;
-		item4->clip.x2 = xmax;
-		item4->clip.y1 = ycenter;
-		item4->clip.y2 = ymax;
-	}
-
-	(*split_counter)++;
-	return 1;
-}
-
-static bool rockchip_ebc_schedule_area(struct list_head *areas,
-		struct rockchip_ebc_area *area,
-		struct drm_device *drm,
-		u32 current_frame, u32 num_phases,
-		struct rockchip_ebc_area **p_next_area,
-		int * split_counter
-		)
-{
-	struct rockchip_ebc_area *other;
-	// by default, begin now
-	u32 frame_begin = current_frame;
-	// we use this variable to define dead zones. When two area are (at first)
-	// scheduled to start together, but other frames later in the queue prevent
-	// that, then suddenly we need to wait for the other area.
-	u32 do_not_start_before_frame = 0;
-	pr_debug(KERN_INFO "scheduling area: %i-%i %i-%i (current frame: %i)\n", area->clip.x1, area->clip.x2, area->clip.y1, area->clip.y2, current_frame);
-
-	list_for_each_entry(other, areas, list) {
-		struct drm_rect intersection;
-		/* printk(KERN_INFO "    test other area: %i-%i %i-%i (beginning at: %i)\n", other->clip.x1, other->clip.x2, other->clip.y1, other->clip.y2, other->frame_begin); */
-		u32 other_end_excl;
-
-		/* Only consider areas before this one in the list. */
-		if (other == area){
-			/* printk(KERN_INFO "        other==area\n"); */
-			break;
-		}
-
-		/* Skip areas that finish refresh before this area begins. */
-		/* printk(KERN_INFO "        other finishes before: %i %i\n", other_end, frame_begin); */
-		other_end_excl = other->frame_begin + num_phases;
-		if (other_end_excl <= frame_begin){
-			continue;
-		}
-
-		/* If there is no collision, the areas are independent. */
-		/* printk(KERN_INFO "        no collision\n"); */
-		if (!drm_rect_overlap(&area->clip, &other->clip)){
-			continue;
-		}
-
-		intersection = area->clip;
-
-		/* If the other area already started, wait until it finishes. */
-		if (other->frame_begin < current_frame) {
-			/* printk(KERN_INFO "        other already started, setting to %i (%i, %i)\n", frame_begin, num_phases, other_end); */
-			frame_begin = max(frame_begin, other_end_excl);
-			if (frame_begin < do_not_start_before_frame){
-				/* pr_info("      NOTE: dead zone, resetting to: %i", do_not_start_before_frame + 1); */
-				frame_begin = do_not_start_before_frame;
-
-			}
-
-			// so here we would optimally want to split the new area into three
-			// parts that do not overlap with the already-started area, and one
-			// which is overlapping. The overlapping one will be scheduled for
-			// later, but the other three should start immediately.
-
-			/* printk(KERN_INFO "        intersection completely contains area\n"); */
-			// if other clip hides the current clip, continue
-			if (!drm_rect_intersect(&intersection, &other->clip)) {
-				continue;
-			}
-
-			if (try_to_split_area(areas, area, other, split_counter, p_next_area, &intersection))
-			{
-				// let the outer loop delete this area
-				/* printk(KERN_INFO "        dropping after trying to split\n"); */
-				return false;
-			} else {
-				continue;
-			}
-		}
-
-		/*
-		 * If the other area has not started yet, and completely
-		 * contains this area, then this area is redundant.
-		 */
-		if (!drm_rect_intersect(&intersection, &other->clip)) {
-			drm_dbg(drm, "area %p (" DRM_RECT_FMT ") dropped, inside " DRM_RECT_FMT "\n",
-					area, DRM_RECT_ARG(&area->clip), DRM_RECT_ARG(&other->clip));
-			/* printk(KERN_INFO "    dropping\n"); */
-			return false;
-		}
-		/* printk(KERN_INFO "    we are at: %i\n", frame_begin); */
-
-		/* They do overlap but are are not equal and both not started yet, so
-		 * they can potentially start together */
-		if (frame_begin > other->frame_begin){
-			// for some reason we need to begin later than the other region,
-			// which forces us to wait for the region
-			/* pr_info(     "we need to wait"); */
-			frame_begin = max(frame_begin, other_end_excl);
-			frame_begin = max(frame_begin, do_not_start_before_frame);
-		} else {
-			if (other->frame_begin >= do_not_start_before_frame) {
-				// they can begin together
-				frame_begin = other->frame_begin;
-				do_not_start_before_frame = other_end_excl;
-				/* pr_info(     "begin together"); */
-			} else {
-				frame_begin = max(other_end_excl, do_not_start_before_frame);
-				/* pr_info(     "we need to wait 2"); */
-			}
-		}
-
-		/* printk(KERN_INFO "    setting to: %i\n", frame_begin); */
-
-		// try to split, otherwise continue
-		if (try_to_split_area(areas, area, other, split_counter, p_next_area, &intersection))
-		{
-			// let the outer loop delete this area
-			/* printk(KERN_INFO "    dropping after trying to split\n"); */
-			return false;
-		} else {
-			/* printk(KERN_INFO "    split not successful\n"); */
-			continue;
-		}
-	}
-
-	area->frame_begin = frame_begin;
-	/* printk(KERN_INFO "    area scheduled to start at frame: %i (current: %i)\n", frame_begin, current_frame); */
-
-	return true;
-}
-
 static void rockchip_ebc_global_refresh_direct(struct rockchip_ebc *ebc,
 					struct rockchip_ebc_ctx *ctx)
 {
@@ -1036,6 +747,7 @@ static void rockchip_ebc_partial_refresh(struct rockchip_ebc *ebc,
 	s64 duration;
 	u32 min_frame_delay = 1000000;
 	u32 max_frame_delay = 0;
+	struct drm_rect clip_ongoing = { .x1 = 100000, .x2 = 0, .y1 = 100000, .y2 = 0 };
 
 	dma_addr_t win_handles[2];
 	win_handles[0] = dma_map_single(
@@ -1051,6 +763,17 @@ static void rockchip_ebc_partial_refresh(struct rockchip_ebc *ebc,
 		drm_err(drm, "win_handles[1] dma mapping error");
 	}
 
+	/* Move the queued damage areas to the local list. */
+	spin_lock(&ctx->queue_lock);
+	list_splice_tail_init(&ctx->queue, &areas);
+	// switch buffers
+	if(ctx->switch_required){
+		ctx->ebc_buffer_index = !ctx->ebc_buffer_index;
+		ctx->switch_required = false;
+	}
+	ctx->final = ctx->final_buffer[ctx->ebc_buffer_index];
+	spin_unlock(&ctx->queue_lock);
+
 	times[time_index++] = ktime_get();
 	for (frame = 0;; frame++) {
 		u8 *phase_buffer = ctx->phase[frame % 2];
@@ -1058,117 +781,47 @@ static void rockchip_ebc_partial_refresh(struct rockchip_ebc *ebc,
 		dma_addr_t win_handle = win_handles[frame % 2];
 		bool sync_next = false;
 		bool sync_prev = false;
-		int split_counter = 0;
+		struct drm_rect clip_ongoing_new_areas = { .x1 = 100000, .x2 = 0, .y1 = 100000, .y2 = 0 };
+		// Used to reset the second phase buffer in direct mode after last_phase
+		struct drm_rect clip_ongoing_prev_and_next = clip_ongoing;
 
-		/* Move the queued damage areas to the local list. */
-		if (frame == 0){
-			spin_lock(&ctx->queue_lock);
-			list_splice_tail_init(&ctx->queue, &areas);
-			// switch buffers
-			if(ctx->switch_required){
-				ctx->ebc_buffer_index = !ctx->ebc_buffer_index;
-				ctx->switch_required = false;
-			}
-			ctx->final = ctx->final_buffer[ctx->ebc_buffer_index];
-			spin_unlock(&ctx->queue_lock);
+		if (frame > 0) {
+			// Increase frame number of running frames by one
+			rockchip_ebc_increment_frame_num(ctx, frame_num_buffer, ctx->frame_num[(frame + 1) % 2], &clip_ongoing, last_phase);
 		}
 
 		list_for_each_entry_safe(area, next_area, &areas, list) {
-			s32 frame_delta;
-			u32 phase;
-
-			/*
-			 * Determine when this area can start its refresh.
-			 * If the area is redundant, drop it immediately.
-			 */
-			if (area->frame_begin == EBC_FRAME_PENDING &&
-			    !rockchip_ebc_schedule_area(&areas, area, drm, frame,
-							ebc->lut.num_phases, &next_area, &split_counter)) {
-				list_del(&area->list);
-				kfree(area);
-				continue;
-			}
-
-			// we wait a little bit longer to start
-			frame_delta = frame - area->frame_begin;
-			if (frame_delta < 0)
-				continue;
-
-			/* Copy ctx->final to ctx->next on the first frame. */
-			if (frame_delta == 0) {
-				pr_debug(KERN_INFO "[rockchip-ebc] partial refresh starting area on frame %i (%i/%i %i/%i) (end: %i)\n", frame, area->clip.x1, area->clip.x2, area->clip.y1, area->clip.y2, area->frame_begin + last_phase);
-				local_area_count += (u64) (
-					area->clip.x2 - area->clip.x1) *
-					(area->clip.y2 - area->clip.y1);
-				rockchip_ebc_blit_pixels(ctx, ctx->next,
-							 ctx->final,
-							 &area->clip);
+			if (area->frame_begin == EBC_FRAME_PENDING || area->frame_begin == frame) {
+				rockchip_ebc_schedule_and_blit(ctx, frame_num_buffer, ctx->next, ctx->final, &clip_ongoing, &clip_ongoing_new_areas, area, frame, last_phase, next_area);
 				sync_next = true;
-
-				drm_dbg(drm, "area %p (" DRM_RECT_FMT ") started on %u\n",
-					area, DRM_RECT_ARG(&area->clip), frame);
-			}
-
-			/*
-			 * Take advantage of the fact that the last phase in a
-			 * waveform is always zero (neutral polarity). Instead
-			 * of writing the actual phase number, write 0xff (the
-			 * last possible phase number), which is guaranteed to
-			 * be neutral for every waveform.
-			 */
-			phase = frame_delta >= last_phase ? 0xff : frame_delta;
-			if (direct_mode)
-				rockchip_ebc_blit_direct(ctx, phase_buffer,
-							 phase, &ebc->lut,
-							 &area->clip);
-			else
-				rockchip_ebc_blit_frame_num(
-					ctx, frame_num_buffer, phase,
-					&area->clip,
-					ctx->frame_num[(frame + 1) % 2],
-					last_phase, frame, check_blit_frame_num);
-
-			/*
-			 * Copy ctx->next to ctx->prev after the last phase.
-			 * Technically, this races with the hardware computing
-			 * the last phase, but the last phase is all zeroes
-			 * anyway, regardless of prev/next (see above).
-			 */
-			if (frame_delta == last_phase) {
-				rockchip_ebc_blit_pixels(ctx, ctx->prev,
-							 ctx->next,
-							 &area->clip);
-				sync_prev = true;
-			}
-
-			/*
-			 * Keeping the area in the list for one extra frame
-			 * also ensures both phase buffers get set to 0xff.
-			 */
-			if (frame_delta > last_phase) {
-				drm_dbg(drm, "area %p (" DRM_RECT_FMT ") finished on %u\n",
-					area, DRM_RECT_ARG(&area->clip), frame);
-
-				pr_debug(
-					KERN_INFO "[rockchip-ebc]     partial refresh stopping area on frame %i (%i/%i %i/%i)\n", frame, area->clip.x1, area->clip.x2, area->clip.y1, area->clip.y2
-				);
-				list_del(&area->list);
-				kfree(area);
+				if (drm_rect_width(&area->clip) <= 0) {
+					// All pixels covered by this region have been blitted
+					list_del(&area->list);
+					kfree(area);
+				}
 			}
 		}
+
+		rockchip_ebc_drm_rect_extend_rect(&clip_ongoing_new_areas, &clip_ongoing);
+		rockchip_ebc_drm_rect_extend_rect(&clip_ongoing_prev_and_next, &clip_ongoing_new_areas);
+
+		if (direct_mode)
+			rockchip_ebc_blit_direct_fnum(ctx, phase_buffer, frame_num_buffer, ctx->next, ctx->prev, &ebc->lut, &clip_ongoing_prev_and_next);
+
+		// Blit pixels of next to prev that are at last_phase (0xff)
+		if (rockchip_ebc_blit_pixels_last(ctx, ctx->prev, ctx->next, frame_num_buffer, &clip_ongoing, last_phase))
+			sync_prev = true;
+
+		clip_ongoing = clip_ongoing_new_areas;
 
 		if (sync_next && !direct_mode)
 			dma_sync_single_for_device(dev, next_handle,
 						   gray4_size, DMA_TO_DEVICE);
-		if (sync_prev  && !direct_mode)
+		if (sync_prev && !direct_mode)
 			dma_sync_single_for_device(dev, prev_handle,
 						   gray4_size, DMA_TO_DEVICE);
 		dma_sync_single_for_device(dev, win_handle, ctx->mapped_win_size, DMA_TO_DEVICE);
 
-		if (list_empty(&areas)){
-			// TODO: should we try to splice the queue here before quitting?
-			break;
-		}
 		if (frame > 0 && !wait_for_completion_timeout(&ebc->display_end,
 						 EBC_FRAME_TIMEOUT))
 			drm_err(drm, "Frame %d timed out!\n", frame);
@@ -1176,6 +829,10 @@ static void rockchip_ebc_partial_refresh(struct rockchip_ebc *ebc,
 		// record time after frame completed
 		if (frame > 0 && time_index < 100){
 			times[time_index++] = ktime_get();
+		}
+
+		if (drm_rect_width(&clip_ongoing) <= 0) {
+			break;
 		}
 
 		regmap_write(ebc->regmap,
@@ -1221,9 +878,6 @@ static void rockchip_ebc_partial_refresh(struct rockchip_ebc *ebc,
 		};
 	}
 
-	if (frame > 0 && !wait_for_completion_timeout(&ebc->display_end,
-						 EBC_FRAME_TIMEOUT))
-		drm_err(drm, "Frame %d timed out!\n", frame);
 	dma_unmap_single(dev, win_handles[0], ctx->mapped_win_size, DMA_TO_DEVICE);
 	dma_unmap_single(dev, win_handles[1], ctx->mapped_win_size, DMA_TO_DEVICE);
 
@@ -1241,7 +895,6 @@ static void rockchip_ebc_partial_refresh(struct rockchip_ebc *ebc,
 		pr_debug("ebc: frame %i took %llu us", i, duration);
 	}
 	pr_debug("ebc: min/max frame durations: %u/%u [us]", min_frame_delay, max_frame_delay);
-
 }
 
 static void rockchip_ebc_refresh(struct rockchip_ebc *ebc,
