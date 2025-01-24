@@ -28,9 +28,9 @@ void rockchip_ebc_blit_direct(const struct rockchip_ebc_ctx *ctx, u8 *dst,
 			      u8 phase, const struct drm_epd_lut *lut,
 			      const struct drm_rect *clip);
 
-void rockchip_ebc_blit_phase(const struct rockchip_ebc_ctx *ctx, u8 *dst,
-			     u8 phase, const struct drm_rect *clip,
-			     u8 *other_buffer, int last_phase, int frame,
-			     int check_blit_phase);
+void rockchip_ebc_blit_frame_num(const struct rockchip_ebc_ctx *ctx, u8 *dst,
+				 u8 phase, const struct drm_rect *clip,
+				 u8 *other_buffer, int last_phase, int frame,
+				 int check_blit_frame_num);
 
 #endif /* _ROCKCHIP_EBC_BLIT_H */

@@ -39,6 +39,7 @@ struct rockchip_ebc_ctx {
 	u8				*final_buffer[2];
 	u8              *final_atomic_update;
 	u8				*phase[2];
+	u8				*frame_num[2];
 	// which buffer is in use by the ebc thread (0 or 1)?
 	int             ebc_buffer_index;
 	// the first time we get data from the atomic update function, both final
@@ -51,6 +52,10 @@ struct rockchip_ebc_ctx {
 	u32				gray4_size;
 	u32				phase_pitch;
 	u32				phase_size;
+	u32				frame_num_size;
+	u32				frame_num_pitch;
+	// either phase_size or frame_num_size
+	u32				mapped_win_size;
 	u64 area_count;
 };
 
