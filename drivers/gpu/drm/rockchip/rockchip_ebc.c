@@ -154,7 +154,7 @@ MODULE_FIRMWARE(EBC_FIRMWARE);
 #define EBC_OFFCONTENT "rockchip/rockchip_ebc_default_screen.bin"
 MODULE_FIRMWARE(EBC_OFFCONTENT);
 
-// #define ROCKCHIP_EBC_BLIT_PHASE_CHECK
+#define ROCKCHIP_EBC_BLIT_FRAME_NUM_CHECK
 
 struct rockchip_ebc {
 	struct clk			*dclk;
@@ -189,10 +189,12 @@ struct rockchip_ebc {
 	int suspend_was_requested;
 };
 
-#ifdef ROCKCHIP_EBC_BLIT_PHASE_CHECK
-static bool check_blit_phase = 0;
-module_param(check_blit_phase, bool, 0644);
-MODULE_PARM_DESC(check_blit_phase, "waveform to use for display updates");
+static int check_blit_frame_num = 0;
+#ifdef ROCKCHIP_EBC_BLIT_FRAME_NUM_CHECK
+module_param(check_blit_frame_num, int, 0644);
+MODULE_PARM_DESC(
+	check_blit_frame_num,
+	"Check for scheduling errors why blitting to frame number buffer");
 #endif
 
 static int default_waveform = DRM_EPD_WF_GC16;
@@ -376,8 +378,10 @@ static int ioctl_extract_fbs(struct drm_device *dev, void *data,
 	copy_result |= copy_to_user(args->ptr_final, ctx->final, 1313144);
 	// TODO final_atomic_update ?
 
-	copy_result |= copy_to_user(args->ptr_phase1, ctx->phase[0], 2 * 1313144);
-	copy_result |= copy_to_user(args->ptr_phase2, ctx->phase[1], 2 * 1313144);
+	if (direct_mode) {
+		copy_result |= copy_to_user(args->ptr_phase1, ctx->phase[0], 2 * 1313144);
+		copy_result |= copy_to_user(args->ptr_phase2, ctx->phase[1], 2 * 1313144);
+	}
 
 	return copy_result;
 }
@@ -436,6 +440,8 @@ static void rockchip_ebc_ctx_free(struct rockchip_ebc_ctx *ctx)
 	kfree(ctx->final_buffer[0]);
 	kfree(ctx->final_buffer[1]);
 	kfree(ctx->final_atomic_update);
+	kfree(ctx->frame_num[0]);
+	kfree(ctx->frame_num[1]);
 	kfree(ctx->phase[0]);
 	kfree(ctx->phase[1]);
 	kfree(ctx);
@@ -444,7 +450,8 @@ static void rockchip_ebc_ctx_free(struct rockchip_ebc_ctx *ctx)
 static struct rockchip_ebc_ctx *rockchip_ebc_ctx_alloc(struct rockchip_ebc *ebc, u32 width, u32 height)
 {
 	u32 gray4_size = width * height / 2;
-	u32 phase_size = direct_mode ? (width * height + 3) / 4 : width * height;
+	u32 phase_size = width * height / 4;
+	u32 frame_num_size = width * height;
 	struct rockchip_ebc_ctx *ctx;
 	/* pr_info("ebc: %s", __func__); */
 
@@ -458,10 +465,16 @@ static struct rockchip_ebc_ctx *rockchip_ebc_ctx_alloc(struct rockchip_ebc *ebc,
 	ctx->final_buffer[0] = kmalloc(gray4_size, GFP_KERNEL);
 	ctx->final_buffer[1] = kmalloc(gray4_size, GFP_KERNEL);
 	ctx->final_atomic_update = kmalloc(gray4_size, GFP_KERNEL);
-	ctx->phase[0] = kmalloc(phase_size, GFP_KERNEL | GFP_DMA);
-	ctx->phase[1] = kmalloc(phase_size, GFP_KERNEL | GFP_DMA);
-	if (!ctx->prev || !ctx->next || !ctx->final_buffer[0] || !ctx->final_buffer[1] || !ctx->final_atomic_update ||
-			!ctx->phase[0] || !ctx->phase[1]) {
+	ctx->frame_num[0] = kmalloc(frame_num_size, GFP_KERNEL | (direct_mode ? 0 : GFP_DMA));
+	ctx->frame_num[1] = kmalloc(frame_num_size, GFP_KERNEL | (direct_mode ? 0 : GFP_DMA));
+	if (direct_mode) {
+		ctx->phase[0] = kmalloc(phase_size, GFP_KERNEL | GFP_DMA);
+		ctx->phase[1] = kmalloc(phase_size, GFP_KERNEL | GFP_DMA);
+	}
+	if (!ctx->prev || !ctx->next || !ctx->final_buffer[0] ||
+	    !ctx->final_buffer[1] || !ctx->final_atomic_update ||
+	    !ctx->frame_num[0] || !ctx->frame_num[1] ||
+	    (direct_mode && (!ctx->phase[0] || !ctx->phase[1]))) {
 		rockchip_ebc_ctx_free(ctx);
 		return NULL;
 	}
@@ -475,8 +488,11 @@ static struct rockchip_ebc_ctx *rockchip_ebc_ctx_alloc(struct rockchip_ebc *ebc,
 	ctx->switch_required = true;
 	ctx->gray4_pitch = width / 2;
 	ctx->gray4_size  = gray4_size;
-	ctx->phase_pitch = direct_mode ? width / 4 : width;
+	ctx->phase_pitch = width / 4;
 	ctx->phase_size  = phase_size;
+	ctx->frame_num_size = frame_num_size;
+	ctx->frame_num_pitch = width;
+	ctx->mapped_win_size = direct_mode ? phase_size : frame_num_size;
 
 	// we keep track of the updated area and use this value to trigger global
 	// refreshes if auto_refresh is enabled
@@ -1021,21 +1037,25 @@ static void rockchip_ebc_partial_refresh(struct rockchip_ebc *ebc,
 	u32 min_frame_delay = 1000000;
 	u32 max_frame_delay = 0;
 
-	dma_addr_t phase_handles[2];
-	phase_handles[0] = dma_map_single(dev, ctx->phase[0], ctx->phase_size, DMA_TO_DEVICE);
-	if (dma_mapping_error(dev, phase_handles[0])) {
-		drm_err(drm, "phase_handles[0] dma mapping error");
+	dma_addr_t win_handles[2];
+	win_handles[0] = dma_map_single(
+		dev, direct_mode ? ctx->phase[0] : ctx->frame_num[0],
+		ctx->mapped_win_size, DMA_TO_DEVICE);
+	if (dma_mapping_error(dev, win_handles[0])) {
+		drm_err(drm, "win_handles[0] dma mapping error");
 	}
-	phase_handles[1] = dma_map_single(dev, ctx->phase[1], ctx->phase_size, DMA_TO_DEVICE);
-	if (dma_mapping_error(dev, phase_handles[1])) {
-		drm_err(drm, "phase_handles[0] dma mapping error");
+	win_handles[1] = dma_map_single(
+		dev, direct_mode ? ctx->phase[1] : ctx->frame_num[1],
+		ctx->mapped_win_size, DMA_TO_DEVICE);
+	if (dma_mapping_error(dev, win_handles[1])) {
+		drm_err(drm, "win_handles[1] dma mapping error");
 	}
 
 	times[time_index++] = ktime_get();
 	for (frame = 0;; frame++) {
-		/* do not swap phase buffers ... for now */
 		u8 *phase_buffer = ctx->phase[frame % 2];
-		dma_addr_t phase_handle = phase_handles[frame % 2];
+		u8 *frame_num_buffer = ctx->frame_num[frame % 2];
+		dma_addr_t win_handle = win_handles[frame % 2];
 		bool sync_next = false;
 		bool sync_prev = false;
 		int split_counter = 0;
@@ -1102,11 +1122,11 @@ static void rockchip_ebc_partial_refresh(struct rockchip_ebc *ebc,
 							 phase, &ebc->lut,
 							 &area->clip);
 			else
-				rockchip_ebc_blit_phase(ctx, phase_buffer,
-							phase, &area->clip,
-							ctx->phase[(frame + 1) % 2],
-							last_phase, frame,
-							check_blit_phase);
+				rockchip_ebc_blit_frame_num(
+					ctx, frame_num_buffer, phase,
+					&area->clip,
+					ctx->frame_num[(frame + 1) % 2],
+					last_phase, frame, check_blit_frame_num);
 
 			/*
 			 * Copy ctx->next to ctx->prev after the last phase.
@@ -1143,7 +1163,7 @@ static void rockchip_ebc_partial_refresh(struct rockchip_ebc *ebc,
 		if (sync_prev  && !direct_mode)
 			dma_sync_single_for_device(dev, prev_handle,
 						   gray4_size, DMA_TO_DEVICE);
-		dma_sync_single_for_device(dev, phase_handle, ctx->phase_size, DMA_TO_DEVICE);
+		dma_sync_single_for_device(dev, win_handle, ctx->mapped_win_size, DMA_TO_DEVICE);
 
 		if (list_empty(&areas)){
 			// TODO: should we try to splice the queue here before quitting?
@@ -1160,7 +1180,7 @@ static void rockchip_ebc_partial_refresh(struct rockchip_ebc *ebc,
 
 		regmap_write(ebc->regmap,
 			     direct_mode ? EBC_WIN_MST0 : EBC_WIN_MST2,
-			     phase_handle);
+			     win_handle);
 		regmap_write(ebc->regmap, EBC_CONFIG_DONE,
 			     EBC_CONFIG_DONE_REG_CONFIG_DONE);
 		regmap_write(ebc->regmap, EBC_DSP_START,
@@ -1204,8 +1224,8 @@ static void rockchip_ebc_partial_refresh(struct rockchip_ebc *ebc,
 	if (frame > 0 && !wait_for_completion_timeout(&ebc->display_end,
 						 EBC_FRAME_TIMEOUT))
 		drm_err(drm, "Frame %d timed out!\n", frame);
-	dma_unmap_single(dev, phase_handles[0], ctx->phase_size, DMA_TO_DEVICE);
-	dma_unmap_single(dev, phase_handles[1], ctx->phase_size, DMA_TO_DEVICE);
+	dma_unmap_single(dev, win_handles[0], ctx->mapped_win_size, DMA_TO_DEVICE);
+	dma_unmap_single(dev, win_handles[1], ctx->mapped_win_size, DMA_TO_DEVICE);
 
 	ctx->area_count += local_area_count;
 
@@ -1451,10 +1471,12 @@ static int rockchip_ebc_refresh_thread(void *data)
 			}
 		}
 
-		/* NOTE: In direct mode, the phase buffers are repurposed for
-		 * source driver polarity data, where the no-op value is 0. */
-		memset(ctx->phase[0], direct_mode ? 0 : 0xff, ctx->phase_size);
-		memset(ctx->phase[1], direct_mode ? 0 : 0xff, ctx->phase_size);
+		if (direct_mode) {
+			memset(ctx->phase[0], 0, ctx->phase_size);
+			memset(ctx->phase[1], 0, ctx->phase_size);
+		}
+		memset(ctx->frame_num[0], 0xff, ctx->frame_num_size);
+		memset(ctx->frame_num[1], 0xff, ctx->frame_num_size);
 
 		/*
 		 * LUTs use both the old and the new pixel values as inputs.

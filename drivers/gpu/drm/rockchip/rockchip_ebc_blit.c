@@ -392,12 +392,12 @@ void rockchip_ebc_blit_direct(const struct rockchip_ebc_ctx *ctx, u8 *dst,
 }
 EXPORT_SYMBOL(rockchip_ebc_blit_direct);
 
-void rockchip_ebc_blit_phase(const struct rockchip_ebc_ctx *ctx, u8 *dst,
+void rockchip_ebc_blit_frame_num(const struct rockchip_ebc_ctx *ctx, u8 *dst,
 			     u8 phase, const struct drm_rect *clip,
 			     u8 *other_buffer, int last_phase, int frame,
-			     int check_blit_phase)
+			     int check_blit_frame_num)
 {
-	unsigned int pitch = ctx->phase_pitch;
+	unsigned int pitch = ctx->frame_num_pitch;
 	unsigned int width = clip->x2 - clip->x1;
 	unsigned int y;
 	u8 *dst_line;
@@ -406,8 +406,8 @@ void rockchip_ebc_blit_phase(const struct rockchip_ebc_ctx *ctx, u8 *dst,
 	u8 *dst_line2 = other_buffer + clip->y1 * pitch + clip->x1;
 
 	for (y = clip->y1; y < clip->y2; y++) {
-#ifdef ROCKCHIP_EBC_BLIT_PHASE_CHECK
-		if (check_blit_phase == 1) {
+#ifdef ROCKCHIP_EBC_BLIT_FRAME_NUM_CHECK
+		if (check_blit_frame_num == 1) {
 			for (unsigned int x = 0; x < width; ++x) {
 				int sched_err = 0;
 				if (phase == 0) {
@@ -446,7 +446,7 @@ void rockchip_ebc_blit_phase(const struct rockchip_ebc_ctx *ctx, u8 *dst,
 						phase, last_phase);
 				}
 			}
-		} else if (check_blit_phase == 2) {
+		} else if (check_blit_frame_num == 2) {
 			int x = width / 2;
 			int sched_err = 0;
 			if (phase == 0) {
@@ -487,6 +487,6 @@ void rockchip_ebc_blit_phase(const struct rockchip_ebc_ctx *ctx, u8 *dst,
 		dst_line2 += pitch;
 	}
 }
-EXPORT_SYMBOL(rockchip_ebc_blit_phase);
+EXPORT_SYMBOL(rockchip_ebc_blit_frame_num);
 
 MODULE_LICENSE("GPL v2");
