@@ -23,3 +23,7 @@ obj-$(CONFIG_DRM_ROCKCHIP) += rockchipdrm.o
 
 obj-$(CONFIG_DRM_ROCKCHIP_EBC) += rockchip_ebc.o rockchip_ebc_blit.o \
 		rockchip_ebc_blit_neon.o
+
+ifeq ($CONFIG_KERNEL_MODE_NEON),y)
+	CFLAGS_rockchip_ebc_blit_neon.o += $(CC_FLAGS_FPU)
+endif
