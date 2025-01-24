@@ -453,8 +453,8 @@ static struct rockchip_ebc_ctx *rockchip_ebc_ctx_alloc(struct rockchip_ebc *ebc,
 		return NULL;
 
 
-	ctx->prev = kmalloc(gray4_size, GFP_KERNEL | GFP_DMA);
-	ctx->next = kmalloc(gray4_size, GFP_KERNEL | GFP_DMA);
+	ctx->prev = kmalloc(gray4_size, GFP_KERNEL | (direct_mode ? 0 : GFP_DMA));
+	ctx->next = kmalloc(gray4_size, GFP_KERNEL | (direct_mode ? 0 : GFP_DMA));
 	ctx->final_buffer[0] = kmalloc(gray4_size, GFP_KERNEL);
 	ctx->final_buffer[1] = kmalloc(gray4_size, GFP_KERNEL);
 	ctx->final_atomic_update = kmalloc(gray4_size, GFP_KERNEL);
