@@ -4,6 +4,7 @@
  * Author: hrdl <git@hrdl.eu>
  */
 
+#include <asm/neon.h>
 #include <linux/module.h>
 #include <linux/types.h>
 #include <drm/drm_epd_helper.h>
@@ -307,8 +308,10 @@ void rockchip_ebc_blit_pixels(const struct rockchip_ebc_ctx *ctx, u8 *dst,
 	src_line = src + clip->y1 * pitch + x1_bytes;
 
 	if (false) {
+		kernel_neon_begin();
 		rockchip_ebc_blit_pixels_blocks_neon(
 			dst_line, src_line, width, pitch, clip->y2 - clip->y1);
+		kernel_neon_end();
 	} else {
 		for (y = clip->y1; y < clip->y2; y++) {
 			memcpy(dst_line, src_line, width);
