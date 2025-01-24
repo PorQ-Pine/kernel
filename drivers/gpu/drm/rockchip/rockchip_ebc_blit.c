@@ -15,6 +15,15 @@
 #include "rockchip_ebc_blit.h"
 #include "rockchip_ebc_blit_neon.h"
 
+const u8 y4_mask_even = 0x0f;
+const unsigned int y4_shift_even = 0;
+const u8 y4_mask_odd = 0xf0;
+const unsigned int y4_shift_odd = 4;
+const u16 fnum_mask_even = 0x00ff;
+const unsigned int fnum_shift_even = 0;
+const u16 fnum_mask_odd = 0xff00;
+const unsigned int fnum_shift_odd = 8;
+
 bool rockchip_ebc_blit_fb_r4(const struct rockchip_ebc_ctx *ctx,
 			     const struct drm_rect *dst_clip, const void *vaddr,
 			     const struct drm_framebuffer *fb,
@@ -60,8 +69,10 @@ bool rockchip_ebc_blit_fb_xrgb8888(
 	unsigned int src_start_x, x, y;
 	int x_changed_min = -1, x_changed_max = -1;
 	int y_changed_min = -1, y_changed_max = -1;
-	u8 dst_x_mask_src_left = reflect_x ? 0x0f : 0xf0;
-	u8 dst_x_mask_src_right = reflect_x ? 0xf0 : 0x0f;
+	u8 refl_y4_mask_even = reflect_x ? y4_mask_odd : y4_mask_even;
+	u8 refl_y4_mask_odd = reflect_x ? y4_mask_even : y4_mask_odd;
+	u8 refl_y4_shift_even = reflect_x ? y4_shift_odd : y4_shift_even;
+	u8 refl_y4_shift_odd = reflect_x ? y4_shift_even : y4_shift_odd;
 	const void *src;
 	u8 changed = 0;
 	int delta_x;
@@ -126,13 +137,11 @@ bool rockchip_ebc_blit_fb_xrgb8888(
 
 			if (x < src_clip->x1) {
 				// rgb0 should be filled with the content of the dst pixel here
-				rgb0 = (*dbuf & (reflect_x ? 0xf0 : 0x0f)) >>
-				       (reflect_x ? 4 : 0);
+				rgb0 = (*dbuf & refl_y4_mask_even) >> refl_y4_shift_even;
 			}
 			if (x == src_clip->x2 - 1) {
 				// rgb1 should be filled with the content of the dst pixel we
-				rgb1 = (*dbuf & (reflect_x ? 0x0f : 0xf0)) >>
-				       (reflect_x ? 0 : 4);
+				rgb1 = (*dbuf & refl_y4_mask_odd) >> refl_y4_shift_odd;
 			}
 
 			switch (bw_mode) {
@@ -197,18 +206,15 @@ bool rockchip_ebc_blit_fb_xrgb8888(
 				}
 			}
 
-			gray = reflect_x ? (rgb0 << 4 | rgb1) :
-					   (rgb1 << 4 | rgb0);
+			gray = rgb0 << refl_y4_shift_even | rgb1 << refl_y4_shift_odd;
 			changed = gray ^ *dbuf;
 			if (changed) {
 				y_changed_max = y;
 				if (y_changed_min == -1)
 					y_changed_min = y;
 				int x_min, x_max;
-				x_min = changed & dst_x_mask_src_left ? x :
-									x + 1;
-				x_max = changed & dst_x_mask_src_right ? x + 1 :
-									 x;
+				x_min = changed & refl_y4_mask_even ? x : x + 1;
+				x_max = changed & refl_y4_mask_odd ? x + 1 : x;
 				if (x_changed_min == -1 ||
 				    x_changed_min > x_min)
 					x_changed_min = x_min;
@@ -262,77 +268,66 @@ bool rockchip_ebc_blit_fb_xrgb8888(
 }
 EXPORT_SYMBOL(rockchip_ebc_blit_fb_xrgb8888);
 
-void rockchip_ebc_blit_pixels(const struct rockchip_ebc_ctx *ctx, u8 *dst,
-			      const u8 *src, const struct drm_rect *clip)
+void rockchip_ebc_blit_direct_fnum(const struct rockchip_ebc_ctx *ctx,
+				   u8 *phase, u8 *frame_num,
+				   u8 *next, u8 *prev,
+				   const struct drm_epd_lut *lut,
+				   const struct drm_rect *clip)
 {
-	bool start_x_is_odd = clip->x1 & 1;
-	bool end_x_is_odd = clip->x2 & 1;
+	unsigned int phase_pitch = ctx->phase_pitch;
+	unsigned int gray4_pitch = ctx->gray4_pitch;
+	unsigned int frame_num_pitch = ctx->frame_num_pitch;
+	unsigned int x, y;
+	unsigned int x_start = clip->x1 & ~3;
 
-	unsigned int x1_bytes = clip->x1 / 2;
-	unsigned int x2_bytes = clip->x2 / 2;
+	u8 *phase_line = phase + clip->y1 * phase_pitch + x_start / 4;
+	u8 *next_line = next + clip->y1 * gray4_pitch + x_start / 2;
+	u8 *prev_line = prev + clip->y1 * gray4_pitch + x_start / 2;
+	u8 *fnum_line = frame_num + clip->y1 * frame_num_pitch + x_start;
+	/* Each byte in the phase buffer [DCBA] maps to a horizontal block of four pixels in Y4 format [BA] [DC] */
+	for (y = clip->y1; y < clip->y2; ++y, next_line += gray4_pitch, prev_line += gray4_pitch, phase_line += phase_pitch, fnum_line += frame_num_pitch) {
+		u8 *next_elm = next_line;
+		u8 *prev_elm = prev_line;
+		u8 *phase_elm = phase_line;
+		u8 *fnum_elm = fnum_line;
+		for (x = x_start; x < clip->x2; x += 4) {
+			u8 prev0 = *prev_elm++;
+			u8 next0 = *next_elm++;
+			u8 prev1 = *prev_elm++;
+			u8 next1 = *next_elm++;
+			u8 fnum0 = *fnum_elm++;
+			u8 fnum1 = *fnum_elm++;
+			u8 fnum2 = *fnum_elm++;
+			u8 fnum3 = *fnum_elm++;
 
-	unsigned int pitch = ctx->gray4_pitch;
-	unsigned int width;
-	const u8 *src_line;
-	unsigned int y;
-	u8 *dst_line;
-
-	if (start_x_is_odd) {
-		dst_line = dst + clip->y1 * pitch + x1_bytes;
-		src_line = src + clip->y1 * pitch + x1_bytes;
-		for (y = clip->y1; y < clip->y2; ++y) {
-			// only set the uppoer bits
-			*dst_line = (*dst_line & 0x0f) | (*src_line & 0xf0);
-			dst_line += pitch;
-			src_line += pitch;
-		}
-	}
-
-	if (end_x_is_odd) {
-		dst_line = dst + clip->y1 * pitch + x2_bytes;
-		src_line = src + clip->y1 * pitch + x2_bytes;
-		for (y = clip->y1; y < clip->y2; ++y) {
-			// only set the lower bits
-			*dst_line = (*dst_line & 0xf0) | (*src_line & 0x0f);
-			dst_line += pitch;
-			src_line += pitch;
-		}
-	}
-
-	// The first one has already been blitted
-	if (start_x_is_odd)
-		x1_bytes += 1;
-
-	width = x2_bytes - x1_bytes;
-	dst_line = dst + clip->y1 * pitch + x1_bytes;
-	src_line = src + clip->y1 * pitch + x1_bytes;
-
-	if (false) {
-		kernel_neon_begin();
-		rockchip_ebc_blit_pixels_blocks_neon(
-			dst_line, src_line, width, pitch, clip->y2 - clip->y1);
-		kernel_neon_end();
-	} else {
-		for (y = clip->y1; y < clip->y2; y++) {
-			memcpy(dst_line, src_line, width);
-			dst_line += pitch;
-			src_line += pitch;
+			/*
+			 * The LUT is 256 phases * 16 next * 16 previous levels.
+			 * Each value is two bits, so the last dimension neatly
+			 * fits in a 32-bit word.
+			 */
+			u8 data = ((((const u32 *)lut->buf + 16 * fnum0)[prev0 & 0xf] >> ((next0 & 0xf) << 1)) & 0x3) << 0 |
+				  ((((const u32 *)lut->buf + 16 * fnum1)[prev0 >> 4] >> ((next0 >> 4) << 1)) & 0x3) << 2 |
+				  ((((const u32 *)lut->buf + 16 * fnum2)[prev1 & 0xf] >> ((next1 & 0xf) << 1)) & 0x3) << 4 |
+				  ((((const u32 *)lut->buf + 16 * fnum3)[prev1 >> 4] >> ((next1 >> 4) << 1)) & 0x3) << 6;
+			*phase_elm++ = data;
 		}
 	}
 }
-EXPORT_SYMBOL(rockchip_ebc_blit_pixels);
+EXPORT_SYMBOL(rockchip_ebc_blit_direct_fnum);
 
 void rockchip_ebc_blit_direct(const struct rockchip_ebc_ctx *ctx, u8 *dst,
 			      u8 phase, const struct drm_epd_lut *lut,
 			      const struct drm_rect *clip)
 {
+	// TODO: rewrite to blit from frame_num
+	// TODO: with new approach: extend clip and do block-wise blitting, as diff has already happened and frame num is per-pixel
 	const u32 *phase_lut = (const u32 *)lut->buf + 16 * phase;
 	unsigned int dst_pitch = ctx->phase_pitch;
 	unsigned int src_pitch = ctx->gray4_pitch;
 	unsigned int x, y;
 	u8 *dst_line;
 	u32 src_line;
-	unsigned int x_start = clip->x1 ^ (clip->x1 & 3);
+	unsigned int x_start = clip->x1 & ~3;
 
 	/* Each byte in the phase buffer [DCBA] maps to a horizontal block of four pixels in Y4 format [BA] [DC] */
 	u8 adjust_masks[] = { 0xff, 0xfc, 0xf0, 0xc0 };
@@ -488,5 +483,135 @@ void rockchip_ebc_blit_frame_num(const struct rockchip_ebc_ctx *ctx, u8 *dst,
 	}
 }
 EXPORT_SYMBOL(rockchip_ebc_blit_frame_num);
+
+// Increment frame_num by one within clip if < last_phase, otherwise set to 0xff
+void rockchip_ebc_increment_frame_num(const struct rockchip_ebc_ctx *ctx,
+				      u8 *frame_num, u8 *frame_num_prev,
+				      struct drm_rect *clip,
+				      u8 last_phase)
+{
+	unsigned int pitch = ctx->frame_num_pitch;
+	unsigned int x, y;
+	struct drm_rect clip_shrunk = { .x1 = 100000, .x2 = 0, .y1 = 100000, .y2 = 0 };
+
+	for (y = clip->y1; y < clip->y2; ++y) {
+		u8 *fnum_line = frame_num + y * pitch + clip->x1;
+		u8 *fnum_line_prev = frame_num_prev + y * pitch + clip->x1;
+		for (x = clip->x1; x < clip->x2; ++x, ++fnum_line, ++fnum_line_prev) {
+			if (*fnum_line_prev < last_phase) {
+				rockchip_ebc_drm_rect_extend(&clip_shrunk, x, y);
+				*fnum_line = *fnum_line_prev + 1;
+			} else if (*fnum_line != 0xff) {
+				// Avoid writes to potentially speed up dma_sync
+				*fnum_line = 0xff;
+			}
+		}
+	}
+	pr_debug("%s clip=" DRM_RECT_FMT " clip_shrunk=" DRM_RECT_FMT, __func__, DRM_RECT_ARG(clip), DRM_RECT_ARG(&clip_shrunk));
+	*clip = clip_shrunk;
+}
+EXPORT_SYMBOL(rockchip_ebc_increment_frame_num);
+
+// Blit next to prev within clip where frame_num is equal to last_phase. Clip can be adjusted.
+bool rockchip_ebc_blit_pixels_last(const struct rockchip_ebc_ctx *ctx, u8 *prev,
+				   u8 *next, u8 *frame_num_buffer,
+				   struct drm_rect *clip, u8 last_phase)
+{
+	unsigned int gray4_pitch = ctx->gray4_pitch;
+	unsigned int frame_num_pitch = ctx->frame_num_pitch;
+	unsigned int x, y;
+	 u16 double_last_phase = (u16) last_phase | ((u16) last_phase) << 8; // CONCAT11
+	// TODO: be more selective to reduce writes. Either check destination or reintroduce last_phase in increment
+	// u16 double_last_phase = 0xffff;
+	// TODO: probably unnecessary. Consider always syncing instead
+	bool changed = false;
+	unsigned int x_start = clip->x1 & ~1;
+	for (y = clip->y1; y < clip->y2; ++y) {
+		u8 *prev_line = prev + y * gray4_pitch + x_start / 2;
+		u8 *next_line = next + y * gray4_pitch + x_start / 2;
+		u16 *frame_number_line = (u16 *)(frame_num_buffer + y * frame_num_pitch + x_start);
+		for (x = x_start; x < clip->x2; x += 2, ++prev_line, ++next_line, ++frame_number_line) {
+			if (*frame_number_line == double_last_phase) {
+				*prev_line = *next_line;
+				changed = true;
+			} else if ((*frame_number_line & fnum_mask_even) == (double_last_phase & fnum_mask_even)) {
+				*prev_line = (*prev_line & y4_mask_odd) | (*next_line & y4_mask_even);
+				changed = true;
+			} else if ((*frame_number_line & fnum_mask_odd) == (double_last_phase & fnum_mask_odd)) {
+				*prev_line = (*prev_line & y4_mask_even) | (*next_line & y4_mask_odd);
+				changed = true;
+			}
+		}
+	}
+
+	pr_debug("%s clip=" DRM_RECT_FMT " changed=%d", __func__, DRM_RECT_ARG(clip), changed);
+	return changed;
+}
+EXPORT_SYMBOL(rockchip_ebc_blit_pixels_last);
+
+// Blit 0 to frame_num and final to next within clip where final differs from next and frame_num is 0xff or 0x00. Shrink clip to smallest conflict area.
+void rockchip_ebc_schedule_and_blit(const struct rockchip_ebc_ctx *ctx,
+				    u8 *frame_num, u8 *next, u8 *final,
+				    const struct drm_rect *clip_ongoing,
+				    struct drm_rect *clip_ongoing_new_areas,
+				    struct rockchip_ebc_area *area, u32 frame,
+				    u8 last_phase,
+				    struct rockchip_ebc_area *next_area)
+{
+	unsigned int gray4_pitch = ctx->gray4_pitch;
+	unsigned int frame_num_pitch = ctx->frame_num_pitch;
+	unsigned int x, y;
+	unsigned int x_start = area->clip.x1 & ~1;
+	unsigned int pixel_count = 0;
+	u32 frame_begin = frame + last_phase + 1;
+	struct drm_rect conflict = { .x1 = 100000, .x2 = 0, .y1 = 100000, .y2 = 0 };
+	struct drm_rect area_started = { .x1 = 100000, .x2 = 0, .y1 = 100000, .y2 = 0 };
+	for (y = area->clip.y1; y < area->clip.y2; ++y) {
+		u8 *next_elm = next + y * gray4_pitch + x_start / 2;
+		u8 *final_elm = final + y * gray4_pitch + x_start / 2;
+		u16 *fnum = (u16 *)(frame_num + y * frame_num_pitch + x_start);
+		for (x = x_start; x < area->clip.x2; x += 2, ++next_elm, ++final_elm, ++fnum) {
+			bool blit_odd = false, blit_even = false;
+			u8 diff_elm = *next_elm ^ *final_elm;
+			if (diff_elm == 0)
+				continue;
+			if (diff_elm & y4_mask_even) {
+				if ((*fnum & fnum_mask_even) == fnum_mask_even) {
+					blit_even = true;
+					++pixel_count;
+					rockchip_ebc_drm_rect_extend(&area_started, x, y);
+				} else if (*fnum & fnum_mask_even) {
+					frame_begin = min(frame_begin, frame + 1 + last_phase - ((*fnum & fnum_mask_even) >> fnum_shift_even));
+					rockchip_ebc_drm_rect_extend(&conflict, x, y);
+				}
+			}
+			if (diff_elm & y4_mask_odd) {
+				if ((*fnum & fnum_mask_odd) == fnum_mask_odd) {
+					blit_odd = true;
+					rockchip_ebc_drm_rect_extend(&area_started, x + 1, y);
+					++pixel_count;
+				} else if (*fnum & fnum_mask_odd) {
+					frame_begin = min(frame_begin, frame + 1 + last_phase - ((*fnum & fnum_mask_odd) >> fnum_shift_odd));
+					rockchip_ebc_drm_rect_extend(&conflict, x + 1, y);
+				}
+			}
+			if (blit_odd && blit_even) {
+				*fnum = 0;
+				*next_elm = *final_elm;
+			} else if (blit_odd) {
+				*fnum = *fnum & fnum_mask_even;
+				*next_elm = (*next_elm & y4_mask_even) | (*final_elm & y4_mask_odd);
+			} else if(blit_even) {
+				*fnum = *fnum & fnum_mask_odd;
+				*next_elm = (*next_elm & y4_mask_odd) | (*final_elm & y4_mask_even);
+			}
+		}
+	}
+	pr_debug("%s pixel_count=%d frame=%d area->clip=" DRM_RECT_FMT " conflict=" DRM_RECT_FMT " clip_ongoing=" DRM_RECT_FMT, __func__, pixel_count, frame, DRM_RECT_ARG(&area->clip), DRM_RECT_ARG(&conflict), DRM_RECT_ARG(clip_ongoing));
+	area->clip = conflict;
+	area->frame_begin = frame_begin;
+	rockchip_ebc_drm_rect_extend_rect(clip_ongoing_new_areas, &area_started);
+}
+EXPORT_SYMBOL(rockchip_ebc_schedule_and_blit);
 
 MODULE_LICENSE("GPL v2");
