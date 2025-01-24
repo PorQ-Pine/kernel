@@ -184,18 +184,9 @@ struct rockchip_ebc {
 	spinlock_t			refresh_once_lock;
 	// should this go into the ctx?
 	bool do_one_full_refresh;
-	int waveform_at_beggining_of_update;
 	// used to detect when we are suspending so we can do different things to
 	// the ebc display depending on whether we are sleeping or suspending
 	int suspend_was_requested;
-
-	u8				*prev;
-	u8				*next;
-	// this now is only pointer to either final_buffer[0] or final_buffer[1]
-	u8				*final;
-	u8				*final_buffer[2];
-	u8              *final_atomic_update;
-	u8				*phase[2];
 };
 
 #ifdef ROCKCHIP_EBC_BLIT_PHASE_CHECK
