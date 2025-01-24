@@ -2314,8 +2314,8 @@ static bool rockchip_ebc_blit_fb_xrgb8888(const struct rockchip_ebc_ctx *ctx,
 				if (y_changed_min == -1)
 					y_changed_min = y;
 				int x_min, x_max;
-				x_min = changed & dst_x_mask_src_left ? x : x + 1;
-				x_max = changed & dst_x_mask_src_right ? x + 1 : x;
+				x_min = changed & refl_y4_mask_even ? x : x + 1;
+				x_max = changed & refl_y4_mask_odd ? x + 1 : x;
 				if (x_changed_min == -1 || x_changed_min > x_min)
 					x_changed_min = x_min;
 				if (x_changed_max < x_max)
