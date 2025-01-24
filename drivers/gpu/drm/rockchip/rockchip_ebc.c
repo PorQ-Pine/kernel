@@ -205,6 +205,10 @@ static int default_waveform = DRM_EPD_WF_GC16;
 module_param(default_waveform, int, 0644);
 MODULE_PARM_DESC(default_waveform, "waveform to use for display updates");
 
+static bool shrink_damage_clip = false;
+module_param(shrink_damage_clip, bool, 0644);
+MODULE_PARM_DESC(shrink_damage_clip, "shrink damage clip if possible");
+
 static bool diff_mode = true;
 module_param(diff_mode, bool, 0644);
 MODULE_PARM_DESC(diff_mode, "only compute waveforms for changed pixels");
@@ -2331,6 +2335,7 @@ static bool rockchip_ebc_blit_fb_xrgb8888(const struct rockchip_ebc_ctx *ctx,
 		else
 			dst += dst_pitch;
 	}
+	if (shrink_damage_clip) {
 	pr_debug("blitted original dst_clip %d,%d-%d,%d with changed %d,%d-%d,%d",
 		dst_clip->x1, dst_clip->y1, dst_clip->x2, dst_clip->y2,
 		x_changed_min, y_changed_min, x_changed_max + 1, y_changed_max + 1);
@@ -2354,6 +2359,7 @@ static bool rockchip_ebc_blit_fb_xrgb8888(const struct rockchip_ebc_ctx *ctx,
 	}
 	pr_debug("now dst_clip %d,%d %d %d",
 		dst_clip->x1, dst_clip->y1, dst_clip->x2, dst_clip->y2);
+	}
 
 	return y_changed_min != -1;
 }
