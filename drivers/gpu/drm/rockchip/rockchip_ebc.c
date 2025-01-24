@@ -1086,14 +1086,15 @@ static void rockchip_ebc_blit_phase(const struct rockchip_ebc_ctx *ctx,
 	}
 }
 
+static void rockchip_ebc_blit_pixels_blocks_neon(u8 *dst_line,
+		u8 *src_line, int byte_width, int pitch, int clip_height);
+
 static void rockchip_ebc_blit_pixels(const struct rockchip_ebc_ctx *ctx,
 				     u8 *dst, const u8 *src,
 				     const struct drm_rect *clip)
 {
 	bool start_x_is_odd = clip->x1 & 1;
 	bool end_x_is_odd = clip->x2 & 1;
-	u8 first_odd;
-	u8 last_odd;
 
 	unsigned int x1_bytes = clip->x1 / 2;
 	unsigned int x2_bytes = clip->x2 / 2;
@@ -1104,38 +1105,44 @@ static void rockchip_ebc_blit_pixels(const struct rockchip_ebc_ctx *ctx,
 	unsigned int y;
 	u8 *dst_line;
 
-	// the integer division floors by default, but we want to include the last
-	// byte (partially)
-	if (end_x_is_odd)
-		x2_bytes++;
+	if (start_x_is_odd) {
+		dst_line = dst + clip->y1 * pitch + x1_bytes;
+		src_line = src + clip->y1 * pitch + x1_bytes;
+		for (y = clip->y1; y < clip->y2; ++y) {
+			// only set the uppoer bits
+			*dst_line = (*dst_line & 0x0f) | (*src_line & 0xf0);
+			dst_line += pitch;
+			src_line += pitch;
+		}
+	}
+
+	if(end_x_is_odd) {
+		dst_line = dst + clip->y1 * pitch + x2_bytes;
+		src_line = src + clip->y1 * pitch + x2_bytes;
+		for (y = clip->y1; y < clip->y2; ++y) {
+			// only set the lower bits
+			*dst_line = (*dst_line & 0xf0) | (*src_line & 0x0f);
+			dst_line += pitch;
+			src_line += pitch;
+		}
+	}
+
+	// The first one has already been blitted
+	if (start_x_is_odd)
+		x1_bytes += 1;
 
 	width = x2_bytes - x1_bytes;
-
 	dst_line = dst + clip->y1 * pitch + x1_bytes;
 	src_line = src + clip->y1 * pitch + x1_bytes;
 
-	for (y = clip->y1; y < clip->y2; y++) {
-		if (start_x_is_odd)
-			// keep only lower bits to restore it after the blitting
-			first_odd = *dst_line & 0b00001111;
-		if (end_x_is_odd){
-			// keep only the upper bits for restoring later
-			last_odd = *(dst_line + width - 1) & 0b11110000;
+	if (false) {
+		rockchip_ebc_blit_pixels_blocks_neon(dst_line, src_line, width, pitch, clip->y2 - clip->y1);
+	} else {
+		for (y = clip->y1; y < clip->y2; y++) {
+			memcpy(dst_line, src_line, width);
+			dst_line += pitch;
+			src_line += pitch;
 		}
-
-		memcpy(dst_line, src_line, width);
-
-		if (start_x_is_odd){
-			// write back the first 4 saved bits
-			*dst_line = first_odd | (*dst_line & 0b11110000);
-		}
-		if (end_x_is_odd){
-			// write back the last 4 saved bits
-			*(dst_line + width - 1) = (*(dst_line + width - 1) & 0b00001111) | last_odd;
-		}
-
-		dst_line += pitch;
-		src_line += pitch;
 	}
 }
 
