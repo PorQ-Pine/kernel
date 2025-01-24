@@ -1522,8 +1522,10 @@ static void rockchip_ebc_refresh(struct rockchip_ebc *ebc,
 	/* This flag may have been set above, or by the runtime PM callback. */
 	if (ebc->lut_changed) {
 		ebc->lut_changed = false;
-		regmap_bulk_write(ebc->regmap, EBC_LUT_DATA,
-				  ebc->lut.buf, EBC_NUM_LUT_REGS);
+		if (!direct_mode) {
+			regmap_bulk_write(ebc->regmap, EBC_LUT_DATA,
+						ebc->lut.buf, EBC_NUM_LUT_REGS);
+		}
 	}
 
 	regmap_write(ebc->regmap, EBC_DSP_START,
