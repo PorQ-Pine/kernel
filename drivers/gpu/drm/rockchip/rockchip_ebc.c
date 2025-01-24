@@ -38,6 +38,9 @@
 #include <drm/drm_fbdev_ttm.h>
 #include <drm/drm_framebuffer.h>
 
+#include "rockchip_ebc.h"
+#include "rockchip_ebc_blit.h"
+
 #define EBC_DSP_START			0x0000
 #define EBC_DSP_START_DSP_OUT_LOW		BIT(31)
 #define EBC_DSP_START_DSP_SDCE_WIDTH(x)		((x) << 16)
@@ -356,56 +359,12 @@ static int ioctl_set_off_screen(struct drm_device *dev, void *data,
 	return 0;
 }
 
-
-/**
- * struct rockchip_ebc_ctx - context for performing display refreshes
- *
- * @kref: Reference count, maintained as part of the CRTC's atomic state
- * @queue: Queue of damaged areas to be refreshed
- * @queue_lock: Lock protecting access to @queue
- * @prev: Display contents (Y4) before this refresh
- * @next: Display contents (Y4) after this refresh
- * @final: Display contents (Y4) after all pending refreshes
- * @phase: Buffers for selecting a phase from the EBC's LUT, 1 byte/pixel
- * @gray4_pitch: Horizontal line length of a Y4 pixel buffer in bytes
- * @gray4_size: Size of a Y4 pixel buffer in bytes
- * @phase_pitch: Horizontal line length of a phase buffer in bytes
- * @phase_size: Size of a phase buffer in bytes
- */
-struct rockchip_ebc_ctx {
-	struct kref			kref;
-	struct list_head		queue;
-
-	// see final_ebc/final_atomic_update for current use
-	spinlock_t			queue_lock;
-	u8				*prev;
-	u8				*next;
-	// this now is only pointer to either final_buffer[0] or final_buffer[1]
-	u8				*final;
-	u8				*final_buffer[2];
-	u8              *final_atomic_update;
-	u8				*phase[2];
-	// which buffer is in use by the ebc thread (0 or 1)?
-	int             ebc_buffer_index;
-	// the first time we get data from the atomic update function, both final
-	// buffers must be filled
-	bool            first_switch;
-	// we only want to switch between buffers when the buffer content actually
-	// changed
-	bool            switch_required;
-	u32				gray4_pitch;
-	u32				gray4_size;
-	u32				phase_pitch;
-	u32				phase_size;
-	u64 area_count;
-};
-
 struct ebc_crtc_state {
 	struct drm_crtc_state		base;
 	struct rockchip_ebc_ctx		*ctx;
 };
 
-static inline struct ebc_crtc_state *
+	static inline struct ebc_crtc_state *
 to_ebc_crtc_state(struct drm_crtc_state *crtc_state)
 {
 	return container_of(crtc_state, struct ebc_crtc_state, base);
@@ -434,11 +393,11 @@ static int ioctl_extract_fbs(struct drm_device *dev, void *data,
 
 static const struct drm_ioctl_desc ioctls[DRM_COMMAND_END - DRM_COMMAND_BASE] = {
 	DRM_IOCTL_DEF_DRV(ROCKCHIP_EBC_GLOBAL_REFRESH, ioctl_trigger_global_refresh,
-			  DRM_RENDER_ALLOW),
+			DRM_RENDER_ALLOW),
 	DRM_IOCTL_DEF_DRV(ROCKCHIP_EBC_OFF_SCREEN, ioctl_set_off_screen,
-			  DRM_RENDER_ALLOW),
+			DRM_RENDER_ALLOW),
 	DRM_IOCTL_DEF_DRV(ROCKCHIP_EBC_EXTRACT_FBS, ioctl_extract_fbs,
-			  DRM_RENDER_ALLOW),
+			DRM_RENDER_ALLOW),
 };
 
 static const struct drm_driver rockchip_ebc_drm_driver = {
@@ -511,7 +470,7 @@ static struct rockchip_ebc_ctx *rockchip_ebc_ctx_alloc(struct rockchip_ebc *ebc,
 	ctx->phase[0] = kmalloc(phase_size, GFP_KERNEL | GFP_DMA);
 	ctx->phase[1] = kmalloc(phase_size, GFP_KERNEL | GFP_DMA);
 	if (!ctx->prev || !ctx->next || !ctx->final_buffer[0] || !ctx->final_buffer[1] || !ctx->final_atomic_update ||
-	    !ctx->phase[0] || !ctx->phase[1]) {
+			!ctx->phase[0] || !ctx->phase[1]) {
 		rockchip_ebc_ctx_free(ctx);
 		return NULL;
 	}
@@ -545,8 +504,8 @@ static void rockchip_ebc_ctx_release(struct kref *kref)
 }
 
 static void rockchip_ebc_global_refresh_direct(struct rockchip_ebc *ebc,
-					struct rockchip_ebc_ctx *ctx
-					);
+		struct rockchip_ebc_ctx *ctx
+		);
 
 /*
  * CRTC
@@ -644,10 +603,10 @@ static void convert_final_buf_to_target(u8 * buffer, u8 * tmp, u32 gray4_size){
 }
 
 static void rockchip_ebc_global_refresh(struct rockchip_ebc *ebc,
-					struct rockchip_ebc_ctx *ctx,
-					 dma_addr_t next_handle,
-					 dma_addr_t prev_handle
-					)
+		struct rockchip_ebc_ctx *ctx,
+		dma_addr_t next_handle,
+		dma_addr_t prev_handle
+		)
 {
 	struct drm_device *drm = &ebc->drm;
 	u32 gray4_size = ctx->gray4_size;
@@ -688,11 +647,11 @@ static void rockchip_ebc_global_refresh(struct rockchip_ebc *ebc,
 
 	reinit_completion(&ebc->display_end);
 	regmap_write(ebc->regmap, EBC_CONFIG_DONE,
-		     EBC_CONFIG_DONE_REG_CONFIG_DONE);
+			EBC_CONFIG_DONE_REG_CONFIG_DONE);
 	regmap_write(ebc->regmap, EBC_DSP_START,
-		     ebc->dsp_start |
-		     EBC_DSP_START_DSP_FRM_TOTAL(ebc->lut.num_phases - 1) |
-		     EBC_DSP_START_DSP_FRM_START);
+			ebc->dsp_start |
+			EBC_DSP_START_DSP_FRM_TOTAL(ebc->lut.num_phases - 1) |
+			EBC_DSP_START_DSP_FRM_START);
 	// while we wait for the refresh, delete all scheduled areas
 	list_for_each_entry_safe(area, next_area, &areas, list) {
 		list_del(&area->list);
@@ -700,7 +659,7 @@ static void rockchip_ebc_global_refresh(struct rockchip_ebc *ebc,
 	}
 
 	if (!wait_for_completion_timeout(&ebc->display_end,
-					 EBC_REFRESH_TIMEOUT))
+				EBC_REFRESH_TIMEOUT))
 		drm_err(drm, "Refresh timed out!\n");
 
 	memcpy(ctx->prev, ctx->next, gray4_size);
@@ -713,12 +672,12 @@ static void rockchip_ebc_global_refresh(struct rockchip_ebc *ebc,
  */
 static int try_to_split_area(
 		struct list_head *areas,
-	    struct rockchip_ebc_area *area,
-	    struct rockchip_ebc_area *other,
-	    int * split_counter,
-	    struct rockchip_ebc_area **p_next_area,
+		struct rockchip_ebc_area *area,
+		struct rockchip_ebc_area *other,
+		int * split_counter,
+		struct rockchip_ebc_area **p_next_area,
 		struct drm_rect * intersection
-	    ){
+		){
 	int xmin, xmax, ymin, ymax, xcenter, ycenter;
 
 	bool no_xsplit = false;
@@ -858,12 +817,12 @@ static int try_to_split_area(
 }
 
 static bool rockchip_ebc_schedule_area(struct list_head *areas,
-				       struct rockchip_ebc_area *area,
-				       struct drm_device *drm,
-				       u32 current_frame, u32 num_phases,
-				       struct rockchip_ebc_area **p_next_area,
-					   int * split_counter
-					   )
+		struct rockchip_ebc_area *area,
+		struct drm_device *drm,
+		u32 current_frame, u32 num_phases,
+		struct rockchip_ebc_area **p_next_area,
+		int * split_counter
+		)
 {
 	struct rockchip_ebc_area *other;
 	// by default, begin now
@@ -886,14 +845,14 @@ static bool rockchip_ebc_schedule_area(struct list_head *areas,
 		}
 
 		/* Skip areas that finish refresh before this area begins. */
-			/* printk(KERN_INFO "        other finishes before: %i %i\n", other_end, frame_begin); */
+		/* printk(KERN_INFO "        other finishes before: %i %i\n", other_end, frame_begin); */
 		other_end_excl = other->frame_begin + num_phases;
 		if (other_end_excl <= frame_begin){
 			continue;
 		}
 
 		/* If there is no collision, the areas are independent. */
-			/* printk(KERN_INFO "        no collision\n"); */
+		/* printk(KERN_INFO "        no collision\n"); */
 		if (!drm_rect_overlap(&area->clip, &other->clip)){
 			continue;
 		}
@@ -915,7 +874,7 @@ static bool rockchip_ebc_schedule_area(struct list_head *areas,
 			// which is overlapping. The overlapping one will be scheduled for
 			// later, but the other three should start immediately.
 
-				/* printk(KERN_INFO "        intersection completely contains area\n"); */
+			/* printk(KERN_INFO "        intersection completely contains area\n"); */
 			// if other clip hides the current clip, continue
 			if (!drm_rect_intersect(&intersection, &other->clip)) {
 				continue;
@@ -937,7 +896,7 @@ static bool rockchip_ebc_schedule_area(struct list_head *areas,
 		 */
 		if (!drm_rect_intersect(&intersection, &other->clip)) {
 			drm_dbg(drm, "area %p (" DRM_RECT_FMT ") dropped, inside " DRM_RECT_FMT "\n",
-				area, DRM_RECT_ARG(&area->clip), DRM_RECT_ARG(&other->clip));
+					area, DRM_RECT_ARG(&area->clip), DRM_RECT_ARG(&other->clip));
 			/* printk(KERN_INFO "    dropping\n"); */
 			return false;
 		}
@@ -981,169 +940,6 @@ static bool rockchip_ebc_schedule_area(struct list_head *areas,
 	/* printk(KERN_INFO "    area scheduled to start at frame: %i (current: %i)\n", frame_begin, current_frame); */
 
 	return true;
-}
-
-static void rockchip_ebc_blit_direct(const struct rockchip_ebc_ctx *ctx,
-				     u8 *dst, u8 phase,
-				     const struct drm_epd_lut *lut,
-				     const struct drm_rect *clip)
-{
-	const u32 *phase_lut = (const u32 *)lut->buf + 16 * phase;
-	unsigned int dst_pitch = ctx->phase_pitch;
-	unsigned int src_pitch = ctx->gray4_pitch;
-	unsigned int x, y;
-	u8 *dst_line;
-	u32 src_line;
-	unsigned int x_start = clip->x1 ^ (clip->x1 & 3);
-
-	/* Each byte in the phase buffer [DCBA] maps to a horizontal block of four pixels in Y4 format [BA] [DC] */
-	u8 adjust_masks[] = { 0xff, 0xfc, 0xf0, 0xc0 };
-	u8 x_start_mask = adjust_masks[clip->x1 & 3];
-	u8 x_end_mask = ~adjust_masks[clip->x2 & 3];
-
-	dst_line = dst + clip->y1 * dst_pitch + x_start / 4;
-	src_line = clip->y1 * src_pitch + x_start / 2;
-
-	for (y = clip->y1; y < clip->y2; y++) {
-		u32 src_offset = src_line;
-		u8 *dbuf = dst_line;
-
-		for (x = x_start; x < clip->x2; x += 4) {
-			u8 prev0 = ctx->prev[src_offset];
-			u8 next0 = ctx->next[src_offset++];
-			u8 prev1 = ctx->prev[src_offset];
-			u8 next1 = ctx->next[src_offset++];
-
-			/*
-			 * The LUT is 256 phases * 16 next * 16 previous levels.
-			 * Each value is two bits, so the last dimension neatly
-			 * fits in a 32-bit word.
-			 */
-			u8 data = ((phase_lut[prev0 & 0xf] >> ((next0 & 0xf) << 1)) & 0x3) << 0 |
-				  ((phase_lut[prev0 >>  4] >> ((next0 >>  4) << 1)) & 0x3) << 2 |
-				  ((phase_lut[prev1 & 0xf] >> ((next1 & 0xf) << 1)) & 0x3) << 4 |
-				  ((phase_lut[prev1 >>  4] >> ((next1 >>  4) << 1)) & 0x3) << 6;
-
-			// Restore phase data written by other areas
-			u8 data_mask = 0x00;
-
-			// Don't assume 4-byte alignment
-			if (x + 4 > clip->x2) {
-				data &= x_end_mask;
-				data_mask |= ~x_end_mask;
-			}
-			if (x == x_start) {
-				data &= x_start_mask;
-				data_mask |= ~x_start_mask;
-			}
-
-			*dbuf++ = data | (*dbuf & data_mask);
-		}
-
-		dst_line += dst_pitch;
-		src_line += src_pitch;
-	}
-}
-
-static void rockchip_ebc_blit_phase(const struct rockchip_ebc_ctx *ctx,
-				    u8 *dst, u8 phase,
-				    const struct drm_rect *clip, u8 *other_buffer, int last_phase, int frame)
-{
-	unsigned int pitch = ctx->phase_pitch;
-	unsigned int width = clip->x2 - clip->x1;
-	unsigned int y;
-	u8 *dst_line;
-
-	dst_line = dst + clip->y1 * pitch + clip->x1;
-	u8 *dst_line2 = other_buffer + clip->y1 * pitch + clip->x1;
-
-	for (y = clip->y1; y < clip->y2; y++) {
-#ifdef ROCKCHIP_EBC_BLIT_PHASE_CHECK
-		if (check_blit_phase) {
-			for (unsigned int x = 0; x < width; ++x) {
-				int sched_err = 0;
-				if (phase == 0) {
-					sched_err |= dst_line[x] != 0xff && dst_line[x] != phase;
-					sched_err |= (dst_line2[x] != 0xff) << 1;
-				} else if (phase == 1) {
-					sched_err |= (dst_line[x] != 0xff && dst_line[x] != phase) << 2;
-					sched_err |= (dst_line2[x] != 0) << 3;
-				} else if (phase == 0xff) {
-					sched_err |= (!((dst_line2[x] == 0xff && (dst_line[x] == last_phase - 1 || dst_line[x] == 0xff)) || (dst_line2[x] == last_phase - 1 && (dst_line[x] == last_phase - 2 || dst_line[x] == 0xff)))) << 4;
-				} else {
-					sched_err |= (!(dst_line2[x] == phase - 1 && (dst_line[x] == phase - 2 || dst_line[x] == phase))) << 5;
-				}
-				if (sched_err) {
-					pr_info("scheduling error: err=%d frame=%d x=%d y=%d dst=%d other_dst=%d phase=%d, last_phase=%d", sched_err, frame, clip->x1 + x, y, dst_line[x], dst_line2[x], phase, last_phase);
-				}
-			}
-		}
-#endif
-		memset(dst_line, phase, width);
-
-		dst_line += pitch;
-		dst_line2 += pitch;
-	}
-}
-
-static void rockchip_ebc_blit_pixels_blocks_neon(u8 *dst_line,
-		u8 *src_line, int byte_width, int pitch, int clip_height);
-
-static void rockchip_ebc_blit_pixels(const struct rockchip_ebc_ctx *ctx,
-				     u8 *dst, const u8 *src,
-				     const struct drm_rect *clip)
-{
-	bool start_x_is_odd = clip->x1 & 1;
-	bool end_x_is_odd = clip->x2 & 1;
-
-	unsigned int x1_bytes = clip->x1 / 2;
-	unsigned int x2_bytes = clip->x2 / 2;
-
-	unsigned int pitch = ctx->gray4_pitch;
-	unsigned int width;
-	const u8 *src_line;
-	unsigned int y;
-	u8 *dst_line;
-
-	if (start_x_is_odd) {
-		dst_line = dst + clip->y1 * pitch + x1_bytes;
-		src_line = src + clip->y1 * pitch + x1_bytes;
-		for (y = clip->y1; y < clip->y2; ++y) {
-			// only set the uppoer bits
-			*dst_line = (*dst_line & 0x0f) | (*src_line & 0xf0);
-			dst_line += pitch;
-			src_line += pitch;
-		}
-	}
-
-	if(end_x_is_odd) {
-		dst_line = dst + clip->y1 * pitch + x2_bytes;
-		src_line = src + clip->y1 * pitch + x2_bytes;
-		for (y = clip->y1; y < clip->y2; ++y) {
-			// only set the lower bits
-			*dst_line = (*dst_line & 0xf0) | (*src_line & 0x0f);
-			dst_line += pitch;
-			src_line += pitch;
-		}
-	}
-
-	// The first one has already been blitted
-	if (start_x_is_odd)
-		x1_bytes += 1;
-
-	width = x2_bytes - x1_bytes;
-	dst_line = dst + clip->y1 * pitch + x1_bytes;
-	src_line = src + clip->y1 * pitch + x1_bytes;
-
-	if (false) {
-		rockchip_ebc_blit_pixels_blocks_neon(dst_line, src_line, width, pitch, clip->y2 - clip->y1);
-	} else {
-		for (y = clip->y1; y < clip->y2; y++) {
-			memcpy(dst_line, src_line, width);
-			dst_line += pitch;
-			src_line += pitch;
-		}
-	}
 }
 
 static void rockchip_ebc_global_refresh_direct(struct rockchip_ebc *ebc,
@@ -1316,7 +1112,10 @@ static void rockchip_ebc_partial_refresh(struct rockchip_ebc *ebc,
 							 &area->clip);
 			else
 				rockchip_ebc_blit_phase(ctx, phase_buffer,
-							phase, &area->clip, ctx->phase[(frame + 1) % 2], last_phase, frame);
+							phase, &area->clip,
+							ctx->phase[(frame + 1) % 2],
+							last_phase, frame,
+							check_blit_phase);
 
 			/*
 			 * Copy ctx->next to ctx->prev after the last phase.
@@ -2144,235 +1943,6 @@ static int rockchip_ebc_plane_atomic_check(struct drm_plane *plane,
 	return 0;
 }
 
-static bool rockchip_ebc_blit_fb_r4(const struct rockchip_ebc_ctx *ctx,
-				 const struct drm_rect *dst_clip,
-				 const void *vaddr,
-				 const struct drm_framebuffer *fb,
-				 const struct drm_rect *src_clip
-				 )
-{
-	unsigned int dst_pitch = ctx->gray4_pitch;
-	unsigned int src_pitch = fb->pitches[0];
-	unsigned int y;
-	const void *src;
-	void *dst;
-	pr_debug("%s starting", __func__);
-
-	unsigned width = src_clip->x2 - src_clip->x1;
-	unsigned int x1_bytes = src_clip->x1 / 2;
-	unsigned int x2_bytes = src_clip->x2 / 2;
-	width = x2_bytes - x1_bytes;
-
-	src = vaddr + src_clip->y1 * src_pitch + x1_bytes;
-	dst = ctx->final_atomic_update + dst_clip->y1 * dst_pitch + dst_clip->x1 / 2;
-
-	for (y = src_clip->y1; y < src_clip->y2; y++) {
-		memcpy(dst, src, width);
-		dst += dst_pitch;
-		src += src_pitch;
-	}
-
-	return true;
-}
-
-static bool rockchip_ebc_blit_fb_xrgb8888(const struct rockchip_ebc_ctx *ctx,
-				 struct drm_rect *dst_clip,
-				 const void *vaddr,
-				 const struct drm_framebuffer *fb,
-				 const struct drm_rect *src_clip
-				 )
-{
-	unsigned int dst_pitch = ctx->gray4_pitch;
-	unsigned int src_pitch = fb->pitches[0];
-	unsigned int src_start_x, x, y;
-	int x_changed_min = -1, x_changed_max = -1;
-	int y_changed_min = -1, y_changed_max = -1;
-	u8 refl_y4_mask_even = reflect_x ? y4_mask_odd : y4_mask_even;
-	u8 refl_y4_mask_odd = reflect_x ? y4_mask_even : y4_mask_odd;
-	u8 refl_y4_shift_even = reflect_x ? y4_shift_odd : y4_shift_even;
-	u8 refl_y4_shift_odd = reflect_x ? y4_shift_even : y4_shift_odd;
-	const void *src;
-	u8 changed = 0;
-	int delta_x;
-	void *dst;
-	u8 dither_low, dither_high;
-	bool reflect_x = panel_reflection;
-	bool reflect_y = !reflect_x;
-
-	// original pattern
-	/* int dither_pattern[4][4] = { */
-	/* 	{0, 8, 2, 10}, */
-	/* 	{12, 4, 14, 6}, */
-	/* 	{3, 11, 1,  9}, */
-	/* 	{15, 7, 13, 5}, */
-	/* }; */
-	int dither_pattern[4][4] = {
-		{7, 8, 2, 10},
-		{12, 4, 14, 6},
-		{3, 11, 1,  9},
-		{15, 7, 13, 5},
-	};
-
-	pr_debug("%s starting", __func__);
-
-	dither_low = bw_dither_invert ? 15 : 0;
-	dither_high = bw_dither_invert ? 0 : 15;
-	/* printk(KERN_INFO "dither low/high: %u %u bw_mode: %i\n", dither_low, dither_high, bw_mode); */
-
-	// Scan out: row in src order
-	// possibly decrease x1 by one for Y4 alignment
-	src_start_x = src_clip->x1 ^ (src_clip->x1 & 1);
-	delta_x = reflect_x ? -1 : 1;
-
-	dst = ctx->final_atomic_update + (reflect_y ? dst_clip->y2 - 1 : dst_clip->y1) * dst_pitch
-		+ (reflect_x ? (dst_clip->x2 - 1) / 2: dst_clip->x1 / 2);
-	src = vaddr + src_clip->y1 * src_pitch + src_start_x * fb->format->cpp[0];
-
-	for (y = src_clip->y1; y < src_clip->y2; y++) {
-		const u32 *sbuf = src;
-		u8 *dbuf = dst;
-
-		// Y4 alignment in dst buffer
-		for (x = src_start_x; x < src_clip->x2; x += 2) {
-			u32 rgb0, rgb1;
-			u8 gray;
-
-			rgb0 = *sbuf++;
-			rgb1 = *sbuf++;
-
-			/* Truncate the RGB values to 5 bits each. */
-			rgb0 &= 0x00f8f8f8U; rgb1 &= 0x00f8f8f8U;
-			/* Put the sum 2R+5G+B in bits 24-31. */
-			rgb0 *= 0x0020a040U; rgb1 *= 0x0020a040U;
-			/* Unbias the value for rounding to 4 bits. */
-			rgb0 += 0x07000000U; rgb1 += 0x07000000U;
-
-			rgb0 >>= 28;
-			rgb1 >>= 28;
-
-			if (x < src_clip->x1) {
-				// rgb0 should be filled with the content of the dst pixel here
-				rgb0 = (*dbuf & refl_y4_mask_even) >> refl_y4_shift_even;
-			}
-			if (x == src_clip->x2 - 1) {
-				// rgb1 should be filled with the content of the dst pixel we
-				rgb1 = (*dbuf & refl_y4_mask_odd) >> refl_y4_shift_odd;
-			}
-
-			switch (bw_mode){
-				// do nothing for case 0
-				case 1:
-					/* if (y >= 1800){ */
-					/* 	printk(KERN_INFO "bw+dither, before, rgb0 : %i, rgb1: %i\n", rgb0, rgb1); */
-					/* } */
-					// bw + dithering
-					// convert to black and white
-					if (rgb0 >= dither_pattern[x & 3][y & 3]){
-						rgb0 = dither_high;
-					} else {
-						rgb0 = dither_low;
-					}
-
-					if (rgb1 >= dither_pattern[(x + 1) & 3][y & 3]){
-						rgb1 = dither_high;
-					} else {
-						rgb1 = dither_low;
-					}
-					/* printk(KERN_INFO "bw+dither, after, rgb0 : %i, rgb1: %i\n", rgb0, rgb1); */
-					break;
-				case 2:
-					// bw
-					// convert to black and white
-					if (rgb0 >= bw_threshold){
-						rgb0 = dither_high;
-					} else {
-						rgb0 = dither_low;
-					}
-
-					if (rgb1 >= bw_threshold){
-						rgb1 = dither_high;
-					} else {
-						rgb1 = dither_low;
-					}
-
-					break;
-				case 3:
-					// downsample to 4 bw values corresponding to the DU4
-					// transitions: 0, 5, 10, 15
-					if (rgb0 < fourtone_low_threshold){
-						rgb0 = 0;
-					} else if (rgb0  < fourtone_mid_threshold){
-						rgb0 = 5;
-					} else if (rgb0  < fourtone_hi_threshold){
-						rgb0 = 10;
-					} else {
-						rgb0 = 15;
-					}
-
-					if (rgb1 < fourtone_low_threshold){
-						rgb1 = 0;
-					} else if (rgb1  < fourtone_mid_threshold){
-						rgb1 = 5;
-					} else if (rgb1  < fourtone_hi_threshold){
-						rgb1 = 10;
-					} else {
-						rgb1 = 15;
-					}
-			}
-
-			gray = rgb0 << refl_y4_shift_even | rgb1 << refl_y4_shift_odd;
-			changed = gray ^ *dbuf;
-			if (changed) {
-				y_changed_max = y;
-				if (y_changed_min == -1)
-					y_changed_min = y;
-				int x_min, x_max;
-				x_min = changed & refl_y4_mask_even ? x : x + 1;
-				x_max = changed & refl_y4_mask_odd ? x + 1 : x;
-				if (x_changed_min == -1 || x_changed_min > x_min)
-					x_changed_min = x_min;
-				if (x_changed_max < x_max)
-					x_changed_max = x_max;
-			}
-			*dbuf = gray;
-			dbuf += delta_x;
-		}
-
-		src += src_pitch;
-		if (reflect_y)
-			dst -= dst_pitch;
-		else
-			dst += dst_pitch;
-	}
-	if (shrink_damage_clip) {
-	pr_debug("blitted original dst_clip %d,%d-%d,%d with changed %d,%d-%d,%d",
-		dst_clip->x1, dst_clip->y1, dst_clip->x2, dst_clip->y2,
-		x_changed_min, y_changed_min, x_changed_max + 1, y_changed_max + 1);
-	if (y_changed_min != -1) {
-		if (reflect_y) {
-			dst_clip->y1 += src_clip->y2 - y_changed_max - 1;
-			dst_clip->y2 -= y_changed_min - src_clip->y1;
-		} else {
-			dst_clip->y1 += y_changed_min - src_clip->y1;
-			dst_clip->y2 -= src_clip->y2 - y_changed_max - 1;
-		}
-		if (reflect_x) {
-			dst_clip->x1 += src_clip->x2 - x_changed_max - 1;
-			dst_clip->x2 -= x_changed_min - src_clip->x1;
-		} else {
-			dst_clip->x1 += x_changed_min - src_clip->x1;
-			dst_clip->x2 -= src_clip->x2 - x_changed_max - 1;
-		}
-	} else {
-		dst_clip->x1 = dst_clip->x2 = dst_clip->y1 = dst_clip->y2 = 0;
-	}
-	pr_debug("now dst_clip %d,%d %d %d",
-		dst_clip->x1, dst_clip->y1, dst_clip->x2, dst_clip->y2);
-	}
-
-	return y_changed_min != -1;
-}
-
 static void rockchip_ebc_plane_atomic_update(struct drm_plane *plane,
 					     struct drm_atomic_state *state)
 {
@@ -2435,11 +2005,14 @@ static void rockchip_ebc_plane_atomic_update(struct drm_plane *plane,
 			switch(plane_state->fb->format->format){
 				case DRM_FORMAT_XRGB8888:
 					clip_changed_fb = rockchip_ebc_blit_fb_xrgb8888(
-							ctx, dst_clip, vaddr, plane_state->fb, &src_clip);
+							ctx, dst_clip, vaddr, plane_state->fb, &src_clip, reflect_x,
+							reflect_y, shrink_damage_clip, bw_mode, bw_threshold,
+							bw_dither_invert, fourtone_low_threshold,
+							fourtone_mid_threshold, fourtone_hi_threshold);
 					break;
 				case DRM_FORMAT_R4:
 					clip_changed_fb = rockchip_ebc_blit_fb_r4(
-							ctx, dst_clip, vaddr, plane_state->fb, &src_clip);
+							ctx, dst_clip, vaddr, plane_state->fb, &src_clip, shrink_damage_clip);
 					break;
 			}
 			// the counter should only reach 0 here, -1 can only be externally set
