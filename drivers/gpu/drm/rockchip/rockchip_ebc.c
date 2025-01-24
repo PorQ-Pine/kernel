@@ -981,8 +981,7 @@ static bool rockchip_ebc_schedule_area(struct list_head *areas,
 static void rockchip_ebc_blit_direct(const struct rockchip_ebc_ctx *ctx,
 				     u8 *dst, u8 phase,
 				     const struct drm_epd_lut *lut,
-				     const struct drm_rect *clip,
-				     bool diff)
+				     const struct drm_rect *clip)
 {
 	const u32 *phase_lut = (const u32 *)lut->buf + 16 * phase;
 	unsigned int dst_pitch = ctx->phase_pitch;
@@ -1019,17 +1018,6 @@ static void rockchip_ebc_blit_direct(const struct rockchip_ebc_ctx *ctx,
 				  ((phase_lut[prev0 >>  4] >> ((next0 >>  4) << 1)) & 0x3) << 2 |
 				  ((phase_lut[prev1 & 0xf] >> ((next1 & 0xf) << 1)) & 0x3) << 4 |
 				  ((phase_lut[prev1 >>  4] >> ((next1 >>  4) << 1)) & 0x3) << 6;
-
-			/* Diff mode ignores pixels that did not change brightness. */
-			u8 mask = 0xff;
-			if (diff) {
-				mask = ((next0 ^ prev0) & 0x0f ? 0x03 : 0) |
-					  ((next0 ^ prev0) & 0xf0 ? 0x0c : 0) |
-					  ((next1 ^ prev1) & 0x0f ? 0x30 : 0) |
-					  ((next1 ^ prev1) & 0xf0 ? 0xc0 : 0);
-
-				data &= mask;
-			}
 
 			// Restore phase data written by other areas
 			u8 data_mask = 0x00;
@@ -1184,7 +1172,7 @@ static void rockchip_ebc_global_refresh_direct(struct rockchip_ebc *ebc,
 		u8 *phase_buffer = ctx->phase[phase % 2];
 		dma_addr_t phase_handle = phase_handles[phase % 2];
 
-		rockchip_ebc_blit_direct(ctx, phase_buffer, phase >= last_phase ? 0xff : phase, &ebc->lut, &screen_clip, false);
+		rockchip_ebc_blit_direct(ctx, phase_buffer, phase >= last_phase ? 0xff : phase, &ebc->lut, &screen_clip);
 		dma_sync_single_for_device(dev, phase_handle, ctx->phase_size, DMA_TO_DEVICE);
 
 		if (phase > 0 && !wait_for_completion_timeout(&ebc->display_end,
@@ -1313,8 +1301,7 @@ static void rockchip_ebc_partial_refresh(struct rockchip_ebc *ebc,
 			if (direct_mode)
 				rockchip_ebc_blit_direct(ctx, phase_buffer,
 							 phase, &ebc->lut,
-							 &area->clip,
-							 diff_mode);
+							 &area->clip);
 			else
 				rockchip_ebc_blit_phase(ctx, phase_buffer,
 							phase, &area->clip, ctx->phase[(frame + 1) % 2], last_phase, frame);
