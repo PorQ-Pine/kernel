@@ -172,6 +172,10 @@ struct rockchip_ebc {
 	struct regulator_bulk_data	supplies[EBC_NUM_SUPPLIES];
 	struct task_struct		*refresh_thread;
 	u32				dsp_start;
+	u16				act_width;
+	u16				act_height;
+	u16				hact_start;
+	u16				vact_start;
 	bool				lut_changed;
 	bool				reset_complete;
 	// one screen content: 1872 * 1404 / 2
@@ -200,6 +204,10 @@ MODULE_PARM_DESC(
 static int default_waveform = DRM_EPD_WF_GC16;
 module_param(default_waveform, int, 0644);
 MODULE_PARM_DESC(default_waveform, "waveform to use for display updates");
+
+static bool shrink_virtual_window = false;
+module_param(shrink_virtual_window, bool, 0644);
+MODULE_PARM_DESC(shrink_virtual_window, "shrink virtual window to ongoing clip");
 
 static bool shrink_damage_clip = false;
 module_param(shrink_damage_clip, bool, 0644);
@@ -640,6 +648,11 @@ static void rockchip_ebc_global_refresh(struct rockchip_ebc *ebc,
 	dma_sync_single_for_device(dev, prev_handle, gray4_size, DMA_TO_DEVICE);
 
 	reinit_completion(&ebc->display_end);
+	regmap_write(ebc->regmap, EBC_WIN_VIR, EBC_WIN_VIR_WIN_VIR_HEIGHT(ebc->act_height) | EBC_WIN_VIR_WIN_VIR_WIDTH(ebc->act_width));
+	regmap_write(ebc->regmap, EBC_WIN_ACT, EBC_WIN_ACT_WIN_ACT_HEIGHT(ebc->act_height) | EBC_WIN_ACT_WIN_ACT_WIDTH(ebc->act_width));
+	regmap_write(ebc->regmap, EBC_WIN_DSP, EBC_WIN_DSP_WIN_DSP_HEIGHT(ebc->act_height) | EBC_WIN_DSP_WIN_DSP_WIDTH(ebc->act_width));
+	regmap_write(ebc->regmap, EBC_WIN_DSP_ST, EBC_WIN_DSP_ST_WIN_DSP_YST(ebc->vact_start) | EBC_WIN_DSP_ST_WIN_DSP_XST(ebc->hact_start));
+
 	regmap_write(ebc->regmap, EBC_CONFIG_DONE,
 			EBC_CONFIG_DONE_REG_CONFIG_DONE);
 	regmap_write(ebc->regmap, EBC_DSP_START,
@@ -705,6 +718,10 @@ static void rockchip_ebc_global_refresh_direct(struct rockchip_ebc *ebc,
 						 EBC_FRAME_TIMEOUT))
 			drm_err(drm, "Frame %d timed out!\n", phase);
 
+		regmap_write(ebc->regmap, EBC_WIN_VIR, EBC_WIN_VIR_WIN_VIR_HEIGHT(ebc->act_height) | EBC_WIN_VIR_WIN_VIR_WIDTH(ebc->act_width));
+		regmap_write(ebc->regmap, EBC_WIN_ACT, EBC_WIN_ACT_WIN_ACT_HEIGHT(ebc->act_height) | EBC_WIN_ACT_WIN_ACT_WIDTH(ebc->act_width));
+		regmap_write(ebc->regmap, EBC_WIN_DSP, EBC_WIN_DSP_WIN_DSP_HEIGHT(ebc->act_height) | EBC_WIN_DSP_WIN_DSP_WIDTH(ebc->act_width));
+		regmap_write(ebc->regmap, EBC_WIN_DSP_ST, EBC_WIN_DSP_ST_WIN_DSP_YST(ebc->vact_start) | EBC_WIN_DSP_ST_WIN_DSP_XST(ebc->hact_start));
 		regmap_write(ebc->regmap, EBC_WIN_MST0, phase_handle);
 		regmap_write(ebc->regmap, EBC_CONFIG_DONE, EBC_CONFIG_DONE_REG_CONFIG_DONE);
 		regmap_write(ebc->regmap, EBC_DSP_START, ebc->dsp_start | EBC_DSP_START_DSP_FRM_START);
@@ -835,9 +852,29 @@ static void rockchip_ebc_partial_refresh(struct rockchip_ebc *ebc,
 			break;
 		}
 
-		regmap_write(ebc->regmap,
-			     direct_mode ? EBC_WIN_MST0 : EBC_WIN_MST2,
-			     win_handle);
+		if (shrink_virtual_window) {
+			u16 adj_win_width = ((clip_ongoing.x2 + 7) & ~7) - (clip_ongoing.x1 & ~7);
+			unsigned int win_start_offset = ebc->act_width * clip_ongoing.y1 + (clip_ongoing.x1 & ~7);
+			regmap_write(ebc->regmap, EBC_WIN_VIR, EBC_WIN_VIR_WIN_VIR_HEIGHT(drm_rect_height(&clip_ongoing)) | EBC_WIN_VIR_WIN_VIR_WIDTH(ctx->gray4_pitch * 2));
+			regmap_write(ebc->regmap, EBC_WIN_ACT, EBC_WIN_ACT_WIN_ACT_HEIGHT(drm_rect_height(&clip_ongoing)) | EBC_WIN_ACT_WIN_ACT_WIDTH(adj_win_width));
+			regmap_write(ebc->regmap, EBC_WIN_DSP, EBC_WIN_DSP_WIN_DSP_HEIGHT(drm_rect_height(&clip_ongoing)) | EBC_WIN_DSP_WIN_DSP_WIDTH(adj_win_width));
+			regmap_write(ebc->regmap, EBC_WIN_DSP_ST, EBC_WIN_DSP_ST_WIN_DSP_YST(ebc->vact_start + clip_ongoing.y1) | EBC_WIN_DSP_ST_WIN_DSP_XST(ebc->hact_start + clip_ongoing.x1 / 8));
+			if (direct_mode) {
+				regmap_write(ebc->regmap, EBC_WIN_MST0, win_handle + win_start_offset / 4);
+			} else {
+				regmap_write(ebc->regmap, EBC_WIN_MST0, prev_handle + win_start_offset / 2);
+				regmap_write(ebc->regmap, EBC_WIN_MST1, next_handle + win_start_offset / 2);
+				regmap_write(ebc->regmap, EBC_WIN_MST2, win_handle + win_start_offset);
+			}
+		} else {
+			if (direct_mode) {
+				regmap_write(ebc->regmap, EBC_WIN_MST0, win_handle);
+			} else {
+				regmap_write(ebc->regmap, EBC_WIN_MST0, prev_handle);
+				regmap_write(ebc->regmap, EBC_WIN_MST1, next_handle);
+				regmap_write(ebc->regmap, EBC_WIN_MST2, win_handle);
+			}
+		}
 		regmap_write(ebc->regmap, EBC_CONFIG_DONE,
 			     EBC_CONFIG_DONE_REG_CONFIG_DONE);
 		regmap_write(ebc->regmap, EBC_DSP_START,
@@ -1344,6 +1381,11 @@ static void rockchip_ebc_crtc_mode_set_nofb(struct drm_crtc *crtc)
 
 	ebc->dsp_start = EBC_DSP_START_DSP_SDCE_WIDTH(sdck.hdisplay) |
 			 EBC_DSP_START_SW_BURST_CTRL;
+
+	ebc->act_width = mode.hdisplay;
+	ebc->act_height = mode.vdisplay;
+	ebc->vact_start = vact_start;
+	ebc->hact_start = hact_start;
 
 	regmap_write(ebc->regmap, EBC_EPD_CTRL,
 		     EBC_EPD_CTRL_DSP_GD_END(sdck.htotal - sdck.hskew) |
