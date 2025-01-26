@@ -15,15 +15,6 @@
 #include "rockchip_ebc_blit.h"
 #include "rockchip_ebc_blit_neon.h"
 
-const u8 y4_mask_even = 0x0f;
-const unsigned int y4_shift_even = 0;
-const u8 y4_mask_odd = 0xf0;
-const unsigned int y4_shift_odd = 4;
-const u16 fnum_mask_even = 0x00ff;
-const unsigned int fnum_shift_even = 0;
-const u16 fnum_mask_odd = 0xff00;
-const unsigned int fnum_shift_odd = 8;
-
 bool rockchip_ebc_blit_fb_r4(const struct rockchip_ebc_ctx *ctx,
 			     const struct drm_rect *dst_clip, const void *vaddr,
 			     const struct drm_framebuffer *fb,

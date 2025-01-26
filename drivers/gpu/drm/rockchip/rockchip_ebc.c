@@ -3,6 +3,7 @@
  * Copyright (C) 2021-2022 Samuel Holland <samuel@sholland.org>
  */
 
+#include <asm/neon.h>
 #include <linux/clk.h>
 #include <linux/completion.h>
 #include <linux/iio/consumer.h>
@@ -40,6 +41,7 @@
 
 #include "rockchip_ebc.h"
 #include "rockchip_ebc_blit.h"
+#include "rockchip_ebc_blit_neon.h"
 
 #define EBC_DSP_START			0x0000
 #define EBC_DSP_START_DSP_OUT_LOW		BIT(31)
@@ -229,6 +231,10 @@ static bool skip_reset = false;
 module_param(skip_reset, bool, 0444);
 MODULE_PARM_DESC(skip_reset, "skip the initial display reset");
 
+static bool use_neon = false;
+module_param(use_neon, bool, S_IRUGO|S_IWUSR);
+MODULE_PARM_DESC(use_neon, "use neon-based functions for blitting");
+
 static bool auto_refresh = false;
 module_param(auto_refresh, bool, S_IRUGO|S_IWUSR);
 MODULE_PARM_DESC(auto_refresh, "auto refresh the screen based on partial refreshed area");
@@ -320,11 +326,6 @@ MODULE_PARM_DESC(hskew_override, "Override hskew value");
 
 
 DEFINE_DRM_GEM_FOPS(rockchip_ebc_fops);
-
-const u8 y4_mask_even = 0x0f;
-const unsigned int y4_shift_even = 0;
-const u8 y4_mask_odd = 0xf0;
-const unsigned int y4_shift_odd = 4;
 
 static int ioctl_trigger_global_refresh(struct drm_device *dev, void *data,
 		struct drm_file *file_priv)
@@ -804,12 +805,40 @@ static void rockchip_ebc_partial_refresh(struct rockchip_ebc *ebc,
 
 		if (frame > 0) {
 			// Increase frame number of running frames by one
-			rockchip_ebc_increment_frame_num(ctx, frame_num_buffer, ctx->frame_num[(frame + 1) % 2], &clip_ongoing, last_phase);
+			if (use_neon) {
+				kernel_neon_begin();
+				rockchip_ebc_increment_frame_num_neon(
+					ctx, frame_num_buffer,
+					ctx->frame_num[(frame + 1) % 2],
+					&clip_ongoing, last_phase);
+				kernel_neon_end();
+			} else {
+				rockchip_ebc_increment_frame_num(
+					ctx, frame_num_buffer,
+					ctx->frame_num[(frame + 1) % 2],
+					&clip_ongoing, last_phase);
+			}
 		}
 
 		list_for_each_entry_safe(area, next_area, &areas, list) {
 			if (area->frame_begin == EBC_FRAME_PENDING || area->frame_begin == frame) {
-				rockchip_ebc_schedule_and_blit(ctx, frame_num_buffer, ctx->next, ctx->final, &clip_ongoing, &clip_ongoing_new_areas, area, frame, last_phase, next_area);
+				if (use_neon) {
+					kernel_neon_begin();
+					rockchip_ebc_schedule_and_blit_neon(
+						ctx, frame_num_buffer,
+						ctx->next, ctx->final,
+						&clip_ongoing,
+						&clip_ongoing_new_areas, area,
+						frame, last_phase, next_area);
+					kernel_neon_end();
+				} else {
+					rockchip_ebc_schedule_and_blit(
+						ctx, frame_num_buffer,
+						ctx->next, ctx->final,
+						&clip_ongoing,
+						&clip_ongoing_new_areas, area,
+						frame, last_phase, next_area);
+				}
 				sync_next = true;
 				if (drm_rect_width(&area->clip) <= 0) {
 					// All pixels covered by this region have been blitted
@@ -822,30 +851,59 @@ static void rockchip_ebc_partial_refresh(struct rockchip_ebc *ebc,
 		rockchip_ebc_drm_rect_extend_rect(&clip_ongoing_new_areas, &clip_ongoing);
 		rockchip_ebc_drm_rect_extend_rect(&clip_ongoing_prev_and_next, &clip_ongoing_new_areas);
 
-		if (direct_mode)
-			rockchip_ebc_blit_direct_fnum(ctx, phase_buffer, frame_num_buffer, ctx->next, ctx->prev, &ebc->lut, &clip_ongoing_prev_and_next);
+		if (direct_mode) {
+			if (use_neon) {
+				kernel_neon_begin();
+				rockchip_ebc_blit_direct_fnum_neon(
+					ctx, phase_buffer, frame_num_buffer,
+					ctx->next, ctx->prev, &ebc->lut,
+					&clip_ongoing_prev_and_next);
+				kernel_neon_end();
+			} else {
+				rockchip_ebc_blit_direct_fnum(
+					ctx, phase_buffer, frame_num_buffer,
+					ctx->next, ctx->prev, &ebc->lut,
+					&clip_ongoing_prev_and_next);
+			}
+		}
 
 		// Blit pixels of next to prev that are at last_phase (0xff)
-		if (rockchip_ebc_blit_pixels_last(ctx, ctx->prev, ctx->next, frame_num_buffer, &clip_ongoing, last_phase))
-			sync_prev = true;
+		if (use_neon) {
+			kernel_neon_begin();
+			if (rockchip_ebc_blit_pixels_last_neon(
+				    ctx, ctx->prev, ctx->next, frame_num_buffer,
+				    &clip_ongoing, last_phase))
+				sync_prev = true;
+			kernel_neon_end();
+		} else {
+			if (rockchip_ebc_blit_pixels_last(
+				    ctx, ctx->prev, ctx->next, frame_num_buffer,
+				    &clip_ongoing, last_phase))
+				sync_prev = true;
+		}
 
-		clip_ongoing = clip_ongoing_new_areas;
+			clip_ongoing = clip_ongoing_new_areas;
 
-		if (sync_next && !direct_mode)
-			dma_sync_single_for_device(dev, next_handle,
-						   gray4_size, DMA_TO_DEVICE);
-		if (sync_prev && !direct_mode)
-			dma_sync_single_for_device(dev, prev_handle,
-						   gray4_size, DMA_TO_DEVICE);
-		dma_sync_single_for_device(dev, win_handle, ctx->mapped_win_size, DMA_TO_DEVICE);
+			if (sync_next && !direct_mode)
+				dma_sync_single_for_device(dev, next_handle,
+							   gray4_size,
+							   DMA_TO_DEVICE);
+			if (sync_prev && !direct_mode)
+				dma_sync_single_for_device(dev, prev_handle,
+							   gray4_size,
+							   DMA_TO_DEVICE);
+			dma_sync_single_for_device(dev, win_handle,
+						   ctx->mapped_win_size,
+						   DMA_TO_DEVICE);
 
-		if (frame > 0 && !wait_for_completion_timeout(&ebc->display_end,
-						 EBC_FRAME_TIMEOUT))
-			drm_err(drm, "Frame %d timed out!\n", frame);
+			if (frame > 0 &&
+			    !wait_for_completion_timeout(&ebc->display_end,
+							 EBC_FRAME_TIMEOUT))
+				drm_err(drm, "Frame %d timed out!\n", frame);
 
-		// record time after frame completed
-		if (frame > 0 && time_index < 100){
-			times[time_index++] = ktime_get();
+			// record time after frame completed
+			if (frame > 0 && time_index < 100) {
+				times[time_index++] = ktime_get();
 		}
 
 		if (drm_rect_width(&clip_ongoing) <= 0) {
@@ -1711,17 +1769,42 @@ static void rockchip_ebc_plane_atomic_update(struct drm_plane *plane,
 
 		if (limit_fb_blits != 0){
 			switch(plane_state->fb->format->format){
-				case DRM_FORMAT_XRGB8888:
-					clip_changed_fb = rockchip_ebc_blit_fb_xrgb8888(
-							ctx, dst_clip, vaddr, plane_state->fb, &src_clip, reflect_x,
-							reflect_y, shrink_damage_clip, bw_mode, bw_threshold,
-							bw_dither_invert, fourtone_low_threshold,
-							fourtone_mid_threshold, fourtone_hi_threshold);
-					break;
-				case DRM_FORMAT_R4:
-					clip_changed_fb = rockchip_ebc_blit_fb_r4(
-							ctx, dst_clip, vaddr, plane_state->fb, &src_clip, shrink_damage_clip);
-					break;
+			case DRM_FORMAT_XRGB8888:
+				if (use_neon) {
+					kernel_neon_begin();
+					clip_changed_fb =
+						rockchip_ebc_blit_fb_xrgb8888_neon(
+							ctx, dst_clip, vaddr,
+							plane_state->fb,
+							&src_clip, reflect_x,
+							reflect_y,
+							shrink_damage_clip,
+							bw_mode, bw_threshold,
+							bw_dither_invert,
+							fourtone_low_threshold,
+							fourtone_mid_threshold,
+							fourtone_hi_threshold);
+					kernel_neon_end();
+				} else {
+					clip_changed_fb =
+						rockchip_ebc_blit_fb_xrgb8888(
+							ctx, dst_clip, vaddr,
+							plane_state->fb,
+							&src_clip, reflect_x,
+							reflect_y,
+							shrink_damage_clip,
+							bw_mode, bw_threshold,
+							bw_dither_invert,
+							fourtone_low_threshold,
+							fourtone_mid_threshold,
+							fourtone_hi_threshold);
+				}
+				break;
+			case DRM_FORMAT_R4:
+				clip_changed_fb = rockchip_ebc_blit_fb_r4(
+					ctx, dst_clip, vaddr, plane_state->fb,
+					&src_clip, shrink_damage_clip);
+				break;
 			}
 			// the counter should only reach 0 here, -1 can only be externally set
 			limit_fb_blits -= (limit_fb_blits > 0) ? 1 : 0;
