@@ -213,13 +213,9 @@ static bool direct_mode = false;
 module_param(direct_mode, bool, 0444);
 MODULE_PARM_DESC(direct_mode, "compute waveforms in software (software LUT)");
 
-static bool reflect_y = false;
-module_param(reflect_y, bool, 0644);
-MODULE_PARM_DESC(reflect_y, "reflect the image vertically");
-
-static bool reflect_x = true;
-module_param(reflect_x, bool, 0644);
-MODULE_PARM_DESC(reflect_x, "reflect the image horizontally");
+static bool panel_reflection = true;
+module_param(panel_reflection, bool, 0644);
+MODULE_PARM_DESC(panel_reflection, "reflect the horizontally, otherwise vertically");
 
 static bool skip_reset = false;
 module_param(skip_reset, bool, 0444);
@@ -2176,6 +2172,8 @@ static bool rockchip_ebc_blit_fb_xrgb8888(const struct rockchip_ebc_ctx *ctx,
 	int delta_x;
 	void *dst;
 	u8 dither_low, dither_high;
+	bool reflect_x = panel_reflection;
+	bool reflect_y = !reflect_x;
 
 	// original pattern
 	/* int dither_pattern[4][4] = { */
@@ -2328,6 +2326,8 @@ static void rockchip_ebc_plane_atomic_update(struct drm_plane *plane,
 	const void *vaddr;
 	u64 blit_area = 0;
 	int delay;
+	bool reflect_x = panel_reflection;
+	bool reflect_y = !reflect_x;;
 
 	plane_state = drm_atomic_get_new_plane_state(state, plane);
 	if (!plane_state->crtc)
