@@ -14,6 +14,8 @@
 #include "rockchip_ebc_blit.h"
 #include "rockchip_ebc_blit_neon.h"
 
+#include <asm/neon-intrinsics.h>
+
 bool rockchip_ebc_blit_fb_xrgb8888_neon(
 	const struct rockchip_ebc_ctx *ctx, struct drm_rect *dst_clip,
 	const void *vaddr, const struct drm_framebuffer *fb,
@@ -226,7 +228,10 @@ void rockchip_ebc_blit_direct_fnum_neon(const struct rockchip_ebc_ctx *ctx,
 	unsigned int gray4_pitch = ctx->gray4_pitch;
 	unsigned int frame_num_pitch = ctx->frame_num_pitch;
 	unsigned int x, y;
-	unsigned int x_start = clip->x1 & ~3;
+
+	// 8 byte alignment for neon
+	unsigned int x_start = max(0, min(clip->x1 & ~15, (int) ctx->frame_num_pitch - 32));
+	unsigned int x_end = min((int) ctx->frame_num_pitch, (clip->x2 + 31) & ~15);
 
 	u8 *phase_line = phase + clip->y1 * phase_pitch + x_start / 4;
 	u8 *next_line = next + clip->y1 * gray4_pitch + x_start / 2;
@@ -238,7 +243,7 @@ void rockchip_ebc_blit_direct_fnum_neon(const struct rockchip_ebc_ctx *ctx,
 		u8 *prev_elm = prev_line;
 		u8 *phase_elm = phase_line;
 		u8 *fnum_elm = fnum_line;
-		for (x = x_start; x < clip->x2; x += 4) {
+		for (x = x_start; x < x_end; x += 4) {
 			u8 prev0 = *prev_elm++;
 			u8 next0 = *next_elm++;
 			u8 prev1 = *prev_elm++;
@@ -263,72 +268,99 @@ void rockchip_ebc_blit_direct_fnum_neon(const struct rockchip_ebc_ctx *ctx,
 }
 EXPORT_SYMBOL(rockchip_ebc_blit_direct_fnum_neon);
 
-// Increment frame_num by one within clip if < last_phase, otherwise set to 0xff
-void rockchip_ebc_increment_frame_num_neon(const struct rockchip_ebc_ctx *ctx,
-					   u8 *frame_num, u8 *frame_num_prev,
-					   struct drm_rect *clip, u8 last_phase)
+// Increment frame_num by one within clip if < last_phase, otherwise set to 0xff.
+// In the latter case blit from next to prev. Clip can be increased for alignment
+// and decreased after blitting the last update.
+void rockchip_ebc_update_blit_fnum_prev_neon(const struct rockchip_ebc_ctx *ctx,
+					     u8 *prev, u8 *next, u8 *fnum,
+					     u8 *fnum_prev,
+					     struct drm_rect *clip,
+					     u8 last_phase)
 {
-	unsigned int pitch = ctx->frame_num_pitch;
-	unsigned int x, y;
+	unsigned int fnum_pitch = ctx->frame_num_pitch;
+	unsigned int y4_pitch = ctx->gray4_pitch;
 	struct drm_rect clip_shrunk = { .x1 = 100000, .x2 = 0, .y1 = 100000, .y2 = 0 };
+	unsigned int x, y;
 
+	// 8 byte alignment for neon
+	unsigned int x_start = max(0, min(clip->x1 & ~15, (int) ctx->frame_num_pitch - 32));
+	uint8x16_t q8_last_phase = vdupq_n_u8(last_phase);
+	uint8x16_t q8_0x01 = vdupq_n_u8(0x01);
+	uint8x16_t q8_0xff = vdupq_n_u8(0xff);
 	for (y = clip->y1; y < clip->y2; ++y) {
-		u8 *fnum_line = frame_num + y * pitch + clip->x1;
-		u8 *fnum_line_prev = frame_num_prev + y * pitch + clip->x1;
-		for (x = clip->x1; x < clip->x2; ++x, ++fnum_line, ++fnum_line_prev) {
-			if (*fnum_line_prev < last_phase) {
+		u8 *prev_line = prev + y * y4_pitch + x_start / 2;
+		u8 *next_line = next + y * y4_pitch + x_start / 2;
+		u16 *fnum_line = (u16 *) (fnum + y * fnum_pitch + x_start);
+		u16 *fnum_line_prev = (u16 *) (fnum_prev + y * fnum_pitch + x_start);
+		for (x = x_start; x < clip->x2; x += 32, prev_line += 16, next_line += 16, fnum_line += 16, fnum_line_prev += 16) {
+			uint8x16_t q8_prev, q8_next;
+			uint16x8_t q16_fnum;
+			uint8x16_t q8_fnum, q8_mask, q8_changed, q8_changed2;
+			uint16x8_t q16_mask;
+			uint8x8_t q8s_mask_finished1, q8s_mask_finished2;
+
+			// 16 bytes u8 frame numbers
+			// BBAA DDCC FFDD HHGG
+			q16_fnum = vld1q_u16(fnum_line_prev);
+
+			// BB AA DD CC FF DD HH GG
+			q8_fnum = vreinterpretq_u8_u16(q16_fnum);
+			// 0xff or 0x00 for each u8. These require blitting of next->prev and setting the frame number to 0xff.
+			q8_mask = vceqq_u8(q8_fnum, q8_last_phase);
+			// Increase frame number by one, saturating add
+			q8_fnum = vqaddq_u8(q8_fnum, q8_0x01);
+			// New frame number, either set to 0xff or increased by 1
+			// q8_fnum = vbslq_u8(q8_mask, q8_mask, q8_fnum);
+			q8_fnum = vorrq_u8(q8_fnum, q8_mask);
+			q8_changed = vcltq_u8(q8_fnum, q8_0xff);
+
+			// Write to memory
+			q16_fnum = vreinterpretq_u16_u8(q8_fnum);
+			vst1q_u16(fnum_line, q16_fnum);
+
+			// Reinterpret mask of finished pixels as u16 before shifting
+			// BBAA DDCC FFEE HHGG
+			q16_mask = vreinterpretq_u16_u8(q8_mask);
+			// Shift and narrow. Compatible with half of next/prev y4
+			// BA DC FE HG
+			q8s_mask_finished1 = vshrn_n_u16(q16_mask, 4);
+
+			// Same for the next 16 frame numbers
+			q16_fnum = vld1q_u16(fnum_line_prev + 8);
+			q8_fnum = vreinterpretq_u8_u16(q16_fnum);
+			q8_mask = vceqq_u8(q8_fnum, q8_last_phase);
+			q8_fnum = vqaddq_u8(q8_fnum, q8_0x01);
+			// q8_fnum = vbslq_u8(q8_mask, q8_mask, q8_fnum);
+			q8_fnum = vorrq_u8(q8_fnum, q8_mask);
+			q8_changed2 = vcltq_u8(q8_fnum, q8_0xff);
+			q16_fnum = vreinterpretq_u16_u8(q8_fnum);
+			vst1q_u16(fnum_line + 8, q16_fnum);
+			q16_mask = vreinterpretq_u16_u8(q8_mask);
+			q8s_mask_finished2 = vshrn_n_u16(q16_mask, 4);
+
+			// Combine masks
+			q8_mask = vcombine_u8(q8s_mask_finished1, q8s_mask_finished2);
+
+			if (vmaxvq_u8(q8_mask)) {
+				// Copy required bits from either next or prev
+				// 16 bytes y4 corresponding to 32 pixels
+				// BA DC FE HG
+				q8_prev = vld1q_u8(prev_line);
+				q8_next = vld1q_u8(next_line);
+				q8_prev = vbslq_u8(q8_mask, q8_next, q8_prev);
+				vst1q_u8(prev_line, q8_prev);
+			}
+
+			if (vmaxvq_u8(vorrq_u8(q8_changed, q8_changed2))) {
 				rockchip_ebc_drm_rect_extend(&clip_shrunk, x, y);
-				*fnum_line = *fnum_line_prev + 1;
-			} else if (*fnum_line != 0xff) {
-				// Avoid writes to potentially speed up dma_sync
-				*fnum_line = 0xff;
 			}
 		}
 	}
 	*clip = clip_shrunk;
 }
-EXPORT_SYMBOL(rockchip_ebc_increment_frame_num_neon);
+EXPORT_SYMBOL(rockchip_ebc_update_blit_fnum_prev_neon);
 
-
-
-
-// Blit next to prev within clip where frame_num is equal to last_phase. Clip can be adjusted.
-bool rockchip_ebc_blit_pixels_last_neon(const struct rockchip_ebc_ctx *ctx,
-					u8 *prev, u8 *next,
-					u8 *frame_num_buffer,
-					struct drm_rect *clip, u8 last_phase)
-{
-	unsigned int gray4_pitch = ctx->gray4_pitch;
-	unsigned int frame_num_pitch = ctx->frame_num_pitch;
-	unsigned int x, y;
-	 u16 double_last_phase = (u16) last_phase | ((u16) last_phase) << 8; // CONCAT11
-	// TODO: be more selective to reduce writes. Either check destination or reintroduce last_phase in increment
-	// u16 double_last_phase = 0xffff;
-	// TODO: probably unnecessary. Consider always syncing instead
-	bool changed = false;
-	unsigned int x_start = clip->x1 & ~1;
-	for (y = clip->y1; y < clip->y2; ++y) {
-		u8 *prev_line = prev + y * gray4_pitch + x_start / 2;
-		u8 *next_line = next + y * gray4_pitch + x_start / 2;
-		u16 *frame_number_line = (u16 *)(frame_num_buffer + y * frame_num_pitch + x_start);
-		for (x = x_start; x < clip->x2; x += 2, ++prev_line, ++next_line, ++frame_number_line) {
-			if (*frame_number_line == double_last_phase) {
-				*prev_line = *next_line;
-				changed = true;
-			} else if ((*frame_number_line & fnum_mask_even) == (double_last_phase & fnum_mask_even)) {
-				*prev_line = (*prev_line & y4_mask_odd) | (*next_line & y4_mask_even);
-				changed = true;
-			} else if ((*frame_number_line & fnum_mask_odd) == (double_last_phase & fnum_mask_odd)) {
-				*prev_line = (*prev_line & y4_mask_even) | (*next_line & y4_mask_odd);
-				changed = true;
-			}
-		}
-	}
-	return changed;
-}
-EXPORT_SYMBOL(rockchip_ebc_blit_pixels_last_neon);
-
-// Blit 0 to frame_num and final to next within clip where final differs from next and frame_num is 0xff or 0x00. Shrink clip to smallest conflict area.
+// Blit 0 to frame_num and final to next within clip where final differs from next and frame_num is 0xff. Shrink clip to smallest conflict area.
 void rockchip_ebc_schedule_and_blit_neon(
 	const struct rockchip_ebc_ctx *ctx, u8 *frame_num, u8 *next, u8 *final,
 	const struct drm_rect *clip_ongoing,
@@ -338,50 +370,105 @@ void rockchip_ebc_schedule_and_blit_neon(
 	unsigned int gray4_pitch = ctx->gray4_pitch;
 	unsigned int frame_num_pitch = ctx->frame_num_pitch;
 	unsigned int x, y;
-	unsigned int x_start = area->clip.x1 & ~1;
+	// 8 Byte alignment for neon
+	unsigned int x_start = max(0, min(area->clip.x1 & ~31, (int) ctx->frame_num_pitch - 32));
 	unsigned int pixel_count = 0;
 	u32 frame_begin = frame + last_phase + 1;
 	struct drm_rect conflict = { .x1 = 100000, .x2 = 0, .y1 = 100000, .y2 = 0 };
 	struct drm_rect area_started = { .x1 = 100000, .x2 = 0, .y1 = 100000, .y2 = 0 };
+	uint8x16_t q8_0xff = vdupq_n_u8(0xff);
+	uint8x16_t q8_0x11 = vdupq_n_u8(0x11);
+	uint8x16_t q8_0x00 = vdupq_n_u8(0x00);
 	for (y = area->clip.y1; y < area->clip.y2; ++y) {
-		u8 *next_elm = next + y * gray4_pitch + x_start / 2;
-		u8 *final_elm = final + y * gray4_pitch + x_start / 2;
-		u16 *fnum = (u16 *)(frame_num + y * frame_num_pitch + x_start);
-		for (x = x_start; x < area->clip.x2; x += 2, ++next_elm, ++final_elm, ++fnum) {
-			bool blit_odd = false, blit_even = false;
-			u8 diff_elm = *next_elm ^ *final_elm;
-			if (diff_elm == 0)
+		u8 *next_line = next + y * gray4_pitch + x_start / 2;
+		u8 *final_line = final + y * gray4_pitch + x_start / 2;
+		u16 *fnum_line = (u16 *) (frame_num + y * frame_num_pitch + x_start);
+		for (x = x_start; x < area->clip.x2; x += 32, next_line += 16, final_line += 16, fnum_line += 16) {
+			u8 pixel_count_inc = 0;
+			u8 maximum_conflicting_fnum;
+			uint8x16_t q8_next, q8_final, q8_fnum1, q8_fnum2;
+			uint16x8_t q16_fnum1, q16_fnum2;
+			uint8x16_t q8_mask1_complete, q8_mask2_complete, q8_y4_mask_difference;
+			uint8x16_t q8_y4_mask_complete, q8_y4_mask_blitted;
+			uint8x8_t q8s_y4_mask1_complete, q8s_y4_mask2_complete;
+			uint8x16_t q8_mask1_difference, q8_mask2_difference;
+
+			// 16 bytes y4 corresponding to 32 pixels
+			// BA DC FE HG
+			q8_next = vld1q_u8(next_line);
+			q8_final = vld1q_u8(final_line);
+
+			// Check which pixels have changed. Any value between 0x0 and 0xf for each Y4
+			// BA DC FE HG
+			q8_y4_mask_difference = veorq_u8(q8_next, q8_final);
+			if (!vmaxvq_u8(q8_y4_mask_difference)) {
+				// No pixels have changed, skip block
 				continue;
-			if (diff_elm & y4_mask_even) {
-				if ((*fnum & fnum_mask_even) == fnum_mask_even) {
-					blit_even = true;
-					++pixel_count;
-					rockchip_ebc_drm_rect_extend(&area_started, x, y);
-				} else if (*fnum & fnum_mask_even) {
-					frame_begin = min(frame_begin, frame + 1 + last_phase - ((*fnum & fnum_mask_even) >> fnum_shift_even));
-					rockchip_ebc_drm_rect_extend(&conflict, x, y);
-				}
 			}
-			if (diff_elm & y4_mask_odd) {
-				if ((*fnum & fnum_mask_odd) == fnum_mask_odd) {
-					blit_odd = true;
-					rockchip_ebc_drm_rect_extend(&area_started, x + 1, y);
-					++pixel_count;
-				} else if (*fnum & fnum_mask_odd) {
-					frame_begin = min(frame_begin, frame + 1 + last_phase - ((*fnum & fnum_mask_odd) >> fnum_shift_odd));
-					rockchip_ebc_drm_rect_extend(&conflict, x + 1, y);
-				}
+			// Convert holey Y4 mask to complete mask by widening and comparison to zero. 0xff if pixels differ, o.w. 0x00
+			// BB AA DD CC
+			q8_mask1_difference = vcgtq_u8(vreinterpretq_u8_u16(vshll_n_u8(vget_low_u8(q8_y4_mask_difference), 4)), q8_0x00);
+			q8_mask2_difference = vcgtq_u8(vreinterpretq_u8_u16(vshll_high_n_u8(q8_y4_mask_difference, 4)), q8_0x00);
+			// BA DC
+			q8_y4_mask_difference = vcombine_u8(
+				vshrn_n_u16(vreinterpretq_u16_u8(q8_mask1_difference), 4),
+				vshrn_n_u16(vreinterpretq_u16_u8(q8_mask2_difference), 4));
+
+			// 16 bytes of u8 frame numbers
+			// BBAA DDCC FFEE HHGG
+			q16_fnum1 = vld1q_u16(fnum_line);
+			// BB AA DD CC FF DD HH GG
+			q8_fnum1 = vreinterpretq_u8_u16(q16_fnum1);
+			// 0xff (not running) or 0x00 (running) for each u8
+			q8_mask1_complete = vceqq_u8(q8_fnum1, q8_0xff);
+			// BA DC FE HG
+			q8s_y4_mask1_complete = vshrn_n_u16(vreinterpretq_u16_u8(q8_mask1_complete), 4);
+
+			// Same for the next 16 frame numbers
+			q16_fnum2 = vld1q_u16(fnum_line + 8);
+			q8_fnum2 = vreinterpretq_u8_u16(q16_fnum2);
+			q8_mask2_complete = vceqq_u8(q8_fnum2, q8_0xff);
+			q8s_y4_mask2_complete = vshrn_n_u16(vreinterpretq_u16_u8(q8_mask2_complete), 4);
+
+			// Concatenate the two masks
+			q8_y4_mask_complete = vcombine_u8(q8s_y4_mask1_complete, q8s_y4_mask2_complete);
+
+			// Y4 mask of elements that need changing and do not conflict
+			q8_y4_mask_blitted = vandq_u8(q8_y4_mask_difference, q8_y4_mask_complete);
+
+			// New next: select changing bytes from final, otherwise keep next
+			q8_next = vbslq_u8(q8_y4_mask_blitted, q8_final, q8_next);
+			vst1q_u8(next_line, q8_next);
+
+			// Next, set the frame number of pixels that were blitted to 0. 0x00 if blitted, o.w. 0xff
+			uint8x16_t q8_mask1_not_blitted = vmvnq_u8(vandq_u8(q8_mask1_complete, q8_mask1_difference));
+			uint8x16_t q8_mask2_not_blitted = vmvnq_u8(vandq_u8(q8_mask2_complete, q8_mask2_difference));
+			// And with fnum_data to zero the frame numbers of pixels that start now
+			q16_fnum1 = vandq_u16(q16_fnum1, vreinterpretq_u16_u8(q8_mask1_not_blitted));
+			q16_fnum2 = vandq_u16(q16_fnum2, vreinterpretq_u16_u8(q8_mask2_not_blitted));
+			vst1q_u16(fnum_line, q16_fnum1);
+			vst1q_u16(fnum_line + 8, q16_fnum2);
+
+			// Update tracked regions and reschedule remaining area
+
+			q8_mask1_not_blitted = vandq_u8(q8_mask1_not_blitted, q8_mask1_difference);
+			q8_mask2_not_blitted = vandq_u8(q8_mask2_not_blitted, q8_mask2_difference);
+			// At least one pixel from this block that differs was not started
+			if (vmaxvq_u8(vorrq_u8(q8_mask1_not_blitted, q8_mask2_not_blitted))) {
+				q8_fnum1 = vandq_u8(q8_fnum1, q8_mask1_not_blitted);
+				q8_fnum2 = vandq_u8(q8_fnum2, q8_mask2_not_blitted);
+				maximum_conflicting_fnum = max(vmaxvq_u8(q8_fnum1), vmaxvq_u8(q8_fnum2));
+				// Reschedule area as soon as at least one now conflicting pixel can be started
+				frame_begin = min(frame_begin, frame + 1 + last_phase - maximum_conflicting_fnum);
+				rockchip_ebc_drm_rect_extend(&conflict, x, y);
 			}
-			if (blit_odd && blit_even) {
-				*fnum = 0;
-				*next_elm = *final_elm;
-			} else if (blit_odd) {
-				*fnum = *fnum & fnum_mask_even;
-				*next_elm = (*next_elm & y4_mask_even) | (*final_elm & y4_mask_odd);
-			} else if(blit_even) {
-				*fnum = *fnum & fnum_mask_odd;
-				*next_elm = (*next_elm & y4_mask_odd) | (*final_elm & y4_mask_even);
+
+			pixel_count_inc = vaddvq_u8(vcntq_u8(vandq_u8(q8_y4_mask_blitted, q8_0x11)));
+			// At least one pixel from this block was started
+			if (pixel_count_inc) {
+				rockchip_ebc_drm_rect_extend(&area_started, x, y);
 			}
+			pixel_count += pixel_count_inc;
 		}
 	}
 	area->clip = conflict;
