@@ -15,6 +15,12 @@ bool rockchip_ebc_blit_fb_xrgb8888_neon(
 	int bw_dither_invert, int fourtone_low_threshold,
 	int fourtone_mid_threshold, int fourtone_hi_threshold);
 
+void rockchip_ebc_update_blit_fnum_prev_neon(const struct rockchip_ebc_ctx *ctx,
+					     u8 *prev, u8 *next, u8 *fnum,
+					     u8 *fnum_prev,
+					     struct drm_rect *clip,
+					     u8 last_phase);
+
 void rockchip_ebc_blit_direct_fnum_neon(const struct rockchip_ebc_ctx *ctx,
 					u8 *phase, u8 *frame_num, u8 *next,
 					u8 *prev, const struct drm_epd_lut *lut,
@@ -25,16 +31,6 @@ void rockchip_ebc_blit_frame_num_neon(const struct rockchip_ebc_ctx *ctx,
 				      const struct drm_rect *clip,
 				      u8 *other_buffer, int last_phase,
 				      int frame, int check_blit_frame_num);
-
-void rockchip_ebc_increment_frame_num_neon(const struct rockchip_ebc_ctx *ctx,
-					   u8 *frame_num, u8 *frame_num_prev,
-					   struct drm_rect *clip,
-					   u8 last_phase);
-
-bool rockchip_ebc_blit_pixels_last_neon(const struct rockchip_ebc_ctx *ctx,
-					u8 *prev, u8 *next,
-					u8 *frame_num_buffer,
-					struct drm_rect *clip, u8 last_phase);
 
 void rockchip_ebc_schedule_and_blit_neon(
 	const struct rockchip_ebc_ctx *ctx, u8 *frame_num, u8 *next, u8 *final,

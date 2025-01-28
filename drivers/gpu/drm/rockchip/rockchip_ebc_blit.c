@@ -4,7 +4,6 @@
  * Author: hrdl <git@hrdl.eu>
  */
 
-#include <asm/neon.h>
 #include <linux/module.h>
 #include <linux/types.h>
 #include <drm/drm_epd_helper.h>
@@ -14,6 +13,7 @@
 #include "rockchip_ebc.h"
 #include "rockchip_ebc_blit.h"
 #include "rockchip_ebc_blit_neon.h"
+#include <asm/neon.h>
 
 bool rockchip_ebc_blit_fb_r4(const struct rockchip_ebc_ctx *ctx,
 			     const struct drm_rect *dst_clip, const void *vaddr,
@@ -269,7 +269,9 @@ void rockchip_ebc_blit_direct_fnum(const struct rockchip_ebc_ctx *ctx,
 	unsigned int gray4_pitch = ctx->gray4_pitch;
 	unsigned int frame_num_pitch = ctx->frame_num_pitch;
 	unsigned int x, y;
-	unsigned int x_start = clip->x1 & ~3;
+	// 8 byte alignment for neon
+	unsigned int x_start = max(0, min(clip->x1 & ~15, (int) ctx->frame_num_pitch - 32));
+	unsigned int x_end = min((int) ctx->frame_num_pitch, (clip->x2 + 31) & ~15);
 
 	u8 *phase_line = phase + clip->y1 * phase_pitch + x_start / 4;
 	u8 *next_line = next + clip->y1 * gray4_pitch + x_start / 2;
@@ -281,7 +283,7 @@ void rockchip_ebc_blit_direct_fnum(const struct rockchip_ebc_ctx *ctx,
 		u8 *prev_elm = prev_line;
 		u8 *phase_elm = phase_line;
 		u8 *fnum_elm = fnum_line;
-		for (x = x_start; x < clip->x2; x += 4) {
+		for (x = x_start; x < x_end; x += 4) {
 			u8 prev0 = *prev_elm++;
 			u8 next0 = *next_elm++;
 			u8 prev1 = *prev_elm++;
@@ -552,7 +554,8 @@ void rockchip_ebc_schedule_and_blit(const struct rockchip_ebc_ctx *ctx,
 	unsigned int gray4_pitch = ctx->gray4_pitch;
 	unsigned int frame_num_pitch = ctx->frame_num_pitch;
 	unsigned int x, y;
-	unsigned int x_start = area->clip.x1 & ~1;
+	// unsigned int x_start = area->clip.x1 & ~1;
+	unsigned int x_start = max(0, min(area->clip.x1 & ~15, (int) ctx->frame_num_pitch - 32));
 	unsigned int pixel_count = 0;
 	u32 frame_begin = frame + last_phase + 1;
 	struct drm_rect conflict = { .x1 = 100000, .x2 = 0, .y1 = 100000, .y2 = 0 };

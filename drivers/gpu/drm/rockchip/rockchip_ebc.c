@@ -231,8 +231,8 @@ static bool skip_reset = false;
 module_param(skip_reset, bool, 0444);
 MODULE_PARM_DESC(skip_reset, "skip the initial display reset");
 
-static bool use_neon = false;
-module_param(use_neon, bool, S_IRUGO|S_IWUSR);
+static int use_neon = 0;
+module_param(use_neon, int, S_IRUGO|S_IWUSR);
 MODULE_PARM_DESC(use_neon, "use neon-based functions for blitting");
 
 static bool auto_refresh = false;
@@ -455,7 +455,7 @@ static struct rockchip_ebc_ctx *rockchip_ebc_ctx_alloc(struct rockchip_ebc *ebc,
 	if (!ctx)
 		return NULL;
 
-
+	// TODO: ensure 16 byte alignment
 	ctx->prev = kmalloc(gray4_size, GFP_KERNEL | (direct_mode ? 0 : GFP_DMA));
 	ctx->next = kmalloc(gray4_size, GFP_KERNEL | (direct_mode ? 0 : GFP_DMA));
 	ctx->final_buffer[0] = kmalloc(gray4_size, GFP_KERNEL);
@@ -801,17 +801,19 @@ static void rockchip_ebc_partial_refresh(struct rockchip_ebc *ebc,
 		bool sync_prev = false;
 		struct drm_rect clip_ongoing_new_areas = { .x1 = 100000, .x2 = 0, .y1 = 100000, .y2 = 0 };
 		// Used to reset the second phase buffer in direct mode after last_phase
-		struct drm_rect clip_ongoing_prev_and_next = clip_ongoing;
+		struct drm_rect clip_needs_sync = clip_ongoing;
 
 		if (frame > 0) {
 			// Increase frame number of running frames by one
-			if (use_neon) {
+			if (use_neon & 1) {
 				kernel_neon_begin();
-				rockchip_ebc_increment_frame_num_neon(
-					ctx, frame_num_buffer,
+				rockchip_ebc_update_blit_fnum_prev_neon(
+					ctx, ctx->prev, ctx->next,
+					frame_num_buffer,
 					ctx->frame_num[(frame + 1) % 2],
 					&clip_ongoing, last_phase);
 				kernel_neon_end();
+				pr_debug("%s inc %d " DRM_RECT_FMT " " DRM_RECT_FMT, __func__, frame, DRM_RECT_ARG(&clip_needs_sync), DRM_RECT_ARG(&clip_ongoing));
 			} else {
 				rockchip_ebc_increment_frame_num(
 					ctx, frame_num_buffer,
@@ -822,7 +824,8 @@ static void rockchip_ebc_partial_refresh(struct rockchip_ebc *ebc,
 
 		list_for_each_entry_safe(area, next_area, &areas, list) {
 			if (area->frame_begin == EBC_FRAME_PENDING || area->frame_begin == frame) {
-				if (use_neon) {
+				pr_debug("%s schedul1 %d " DRM_RECT_FMT " " DRM_RECT_FMT, __func__, frame, DRM_RECT_ARG(&area->clip), DRM_RECT_ARG(&clip_ongoing_new_areas));
+				if (use_neon & 2) {
 					kernel_neon_begin();
 					rockchip_ebc_schedule_and_blit_neon(
 						ctx, frame_num_buffer,
@@ -839,6 +842,7 @@ static void rockchip_ebc_partial_refresh(struct rockchip_ebc *ebc,
 						&clip_ongoing_new_areas, area,
 						frame, last_phase, next_area);
 				}
+				pr_debug("%s schedul2 %d " DRM_RECT_FMT " " DRM_RECT_FMT, __func__, frame, DRM_RECT_ARG(&area->clip), DRM_RECT_ARG(&clip_ongoing_new_areas));
 				sync_next = true;
 				if (drm_rect_width(&area->clip) <= 0) {
 					// All pixels covered by this region have been blitted
@@ -849,65 +853,57 @@ static void rockchip_ebc_partial_refresh(struct rockchip_ebc *ebc,
 		}
 
 		rockchip_ebc_drm_rect_extend_rect(&clip_ongoing_new_areas, &clip_ongoing);
-		rockchip_ebc_drm_rect_extend_rect(&clip_ongoing_prev_and_next, &clip_ongoing_new_areas);
+		rockchip_ebc_drm_rect_extend_rect(&clip_needs_sync, &clip_ongoing_new_areas);
 
 		if (direct_mode) {
-			if (use_neon) {
+			if (use_neon & 4) {
 				kernel_neon_begin();
 				rockchip_ebc_blit_direct_fnum_neon(
 					ctx, phase_buffer, frame_num_buffer,
 					ctx->next, ctx->prev, &ebc->lut,
-					&clip_ongoing_prev_and_next);
+					&clip_needs_sync);
 				kernel_neon_end();
 			} else {
 				rockchip_ebc_blit_direct_fnum(
 					ctx, phase_buffer, frame_num_buffer,
 					ctx->next, ctx->prev, &ebc->lut,
-					&clip_ongoing_prev_and_next);
+					&clip_needs_sync);
 			}
 		}
 
 		// Blit pixels of next to prev that are at last_phase (0xff)
-		if (use_neon) {
-			kernel_neon_begin();
-			if (rockchip_ebc_blit_pixels_last_neon(
-				    ctx, ctx->prev, ctx->next, frame_num_buffer,
-				    &clip_ongoing, last_phase))
-				sync_prev = true;
-			kernel_neon_end();
-		} else {
-			if (rockchip_ebc_blit_pixels_last(
-				    ctx, ctx->prev, ctx->next, frame_num_buffer,
-				    &clip_ongoing, last_phase))
-				sync_prev = true;
-		}
+		if (use_neon & 1) {
+			sync_prev = true;
+		} else if (rockchip_ebc_blit_pixels_last(
+				   ctx, ctx->prev, ctx->next, frame_num_buffer,
+				   &clip_ongoing, last_phase))
+			sync_prev = true;
 
-			clip_ongoing = clip_ongoing_new_areas;
-
-			if (sync_next && !direct_mode)
-				dma_sync_single_for_device(dev, next_handle,
-							   gray4_size,
-							   DMA_TO_DEVICE);
-			if (sync_prev && !direct_mode)
-				dma_sync_single_for_device(dev, prev_handle,
-							   gray4_size,
-							   DMA_TO_DEVICE);
-			dma_sync_single_for_device(dev, win_handle,
-						   ctx->mapped_win_size,
+		// TODO: shrink these
+		if (sync_next && !direct_mode)
+			dma_sync_single_for_device(dev, next_handle, gray4_size,
 						   DMA_TO_DEVICE);
+		if (sync_prev && !direct_mode)
+			dma_sync_single_for_device(dev, prev_handle, gray4_size,
+						   DMA_TO_DEVICE);
+		dma_sync_single_for_device(dev, win_handle,
+					   ctx->mapped_win_size, DMA_TO_DEVICE);
 
-			if (frame > 0 &&
-			    !wait_for_completion_timeout(&ebc->display_end,
-							 EBC_FRAME_TIMEOUT))
-				drm_err(drm, "Frame %d timed out!\n", frame);
+		if (frame > 0 && !wait_for_completion_timeout(
+					 &ebc->display_end, EBC_FRAME_TIMEOUT))
+			drm_err(drm, "Frame %d timed out!\n", frame);
 
-			// record time after frame completed
-			if (frame > 0 && time_index < 100) {
-				times[time_index++] = ktime_get();
+		// record time after frame completed
+		if (frame > 0 && time_index < 100) {
+			times[time_index++] = ktime_get();
 		}
 
-		if (drm_rect_width(&clip_ongoing) <= 0) {
-			break;
+		if (use_neon & 1) {
+			if (drm_rect_width(&clip_needs_sync) <= 0)
+				break;
+		} else {
+			if (drm_rect_width(&clip_ongoing) <= 0)
+				break;
 		}
 
 		if (shrink_virtual_window) {
@@ -943,6 +939,8 @@ static void rockchip_ebc_partial_refresh(struct rockchip_ebc *ebc,
 		// buffer directly, and therefore we can use the time to update the
 		// queue. Well, we probably only wait for the spinlock in case the
 		// atomic_update function is currently blitting
+
+		clip_ongoing = clip_ongoing_new_areas;
 
 		if (ctx->switch_required){
 			pr_debug("    we could switch now");
@@ -1770,7 +1768,7 @@ static void rockchip_ebc_plane_atomic_update(struct drm_plane *plane,
 		if (limit_fb_blits != 0){
 			switch(plane_state->fb->format->format){
 			case DRM_FORMAT_XRGB8888:
-				if (use_neon) {
+				if (use_neon & 16) {
 					kernel_neon_begin();
 					clip_changed_fb =
 						rockchip_ebc_blit_fb_xrgb8888_neon(
