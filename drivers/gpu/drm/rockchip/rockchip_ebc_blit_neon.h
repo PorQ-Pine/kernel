@@ -13,6 +13,11 @@ void rockchip_ebc_blit_fb_xrgb8888_y4_neon(const struct rockchip_ebc_ctx *ctx,
 					   const struct drm_framebuffer *fb,
 					   const struct drm_rect *src_clip);
 
+void rockchip_ebc_blit_fb_xrgb8888_y4_dithered2_neon(
+	const struct rockchip_ebc_ctx *ctx, struct drm_rect *dst_clip,
+	const void *vaddr, const struct drm_framebuffer *fb,
+	const struct drm_rect *src_clip, u8 invert);
+
 void rockchip_ebc_update_blit_fnum_prev_neon(const struct rockchip_ebc_ctx *ctx,
 					     u8 *prev, u8 *next, u8 *fnum,
 					     u8 *fnum_prev,
