@@ -13,14 +13,6 @@ void rockchip_ebc_blit_fb_xrgb8888_y4_neon(const struct rockchip_ebc_ctx *ctx,
 					   const struct drm_framebuffer *fb,
 					   const struct drm_rect *src_clip);
 
-bool rockchip_ebc_blit_fb_xrgb8888_neon(
-	const struct rockchip_ebc_ctx *ctx, struct drm_rect *dst_clip,
-	const void *vaddr, const struct drm_framebuffer *fb,
-	const struct drm_rect *src_clip, bool reflect_x, bool reflect_y,
-	bool shrink_damage_clip, int bw_mode, int bw_threshold,
-	int bw_dither_invert, int fourtone_low_threshold,
-	int fourtone_mid_threshold, int fourtone_hi_threshold);
-
 void rockchip_ebc_update_blit_fnum_prev_neon(const struct rockchip_ebc_ctx *ctx,
 					     u8 *prev, u8 *next, u8 *fnum,
 					     u8 *fnum_prev,
