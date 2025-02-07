@@ -13,6 +13,12 @@ void rockchip_ebc_blit_fb_xrgb8888_y4_neon(const struct rockchip_ebc_ctx *ctx,
 					   const struct drm_framebuffer *fb,
 					   const struct drm_rect *src_clip);
 
+void rockchip_ebc_blit_fb_xrgb8888_y4_thresholded4_neon(
+	const struct rockchip_ebc_ctx *ctx, struct drm_rect *dst_clip,
+	const void *vaddr, const struct drm_framebuffer *fb,
+	const struct drm_rect *src_clip, u8 invert, u8 fourtone_low_threshold,
+	u8 fourtone_mid_threshold, u8 fourtone_hi_threshold, bool dither);
+
 void rockchip_ebc_blit_fb_xrgb8888_y4_dithered2_neon(
 	const struct rockchip_ebc_ctx *ctx, struct drm_rect *dst_clip,
 	const void *vaddr, const struct drm_framebuffer *fb,
