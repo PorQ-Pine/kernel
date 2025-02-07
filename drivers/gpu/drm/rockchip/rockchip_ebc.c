@@ -1768,21 +1768,13 @@ static void rockchip_ebc_plane_atomic_update(struct drm_plane *plane,
 		if (limit_fb_blits != 0){
 			switch(plane_state->fb->format->format){
 			case DRM_FORMAT_XRGB8888:
-				if (use_neon & 16) {
+				if ((use_neon & 8) && reflect_x && !reflect_y && bw_mode == 0) {
 					kernel_neon_begin();
-					clip_changed_fb =
-						rockchip_ebc_blit_fb_xrgb8888_neon(
-							ctx, dst_clip, vaddr,
-							plane_state->fb,
-							&src_clip, reflect_x,
-							reflect_y,
-							shrink_damage_clip,
-							bw_mode, bw_threshold,
-							bw_dither_invert,
-							fourtone_low_threshold,
-							fourtone_mid_threshold,
-							fourtone_hi_threshold);
+					rockchip_ebc_blit_fb_xrgb8888_y4_neon(
+						ctx, dst_clip, vaddr,
+						plane_state->fb, &src_clip);
 					kernel_neon_end();
+					clip_changed_fb = true;
 				} else {
 					clip_changed_fb =
 						rockchip_ebc_blit_fb_xrgb8888(

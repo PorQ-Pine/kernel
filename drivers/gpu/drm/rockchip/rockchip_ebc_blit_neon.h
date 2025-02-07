@@ -7,6 +7,12 @@
 #ifndef _ROCKCHIP_EBC_BLIT_NEON_H
 #define _ROCKCHIP_EBC_BLIT_NEON_H
 
+void rockchip_ebc_blit_fb_xrgb8888_y4_neon(const struct rockchip_ebc_ctx *ctx,
+					   struct drm_rect *dst_clip,
+					   const void *vaddr,
+					   const struct drm_framebuffer *fb,
+					   const struct drm_rect *src_clip);
+
 bool rockchip_ebc_blit_fb_xrgb8888_neon(
 	const struct rockchip_ebc_ctx *ctx, struct drm_rect *dst_clip,
 	const void *vaddr, const struct drm_framebuffer *fb,
