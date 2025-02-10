@@ -894,7 +894,7 @@ static void rockchip_ebc_partial_refresh(struct rockchip_ebc *ebc,
 			drm_err(drm, "Frame %d timed out!\n", frame);
 
 		// record time after frame completed
-		if (frame > 0 && time_index < 100) {
+		if (time_index < 100) {
 			times[time_index++] = ktime_get();
 		}
 
@@ -977,7 +977,7 @@ static void rockchip_ebc_partial_refresh(struct rockchip_ebc *ebc,
 	ctx->area_count += local_area_count;
 
 	// print the min/max execution times from within the first 100 frames
-	for (int i=1; i < min(time_index, 100); i++){
+	for (int i=2; i < min(time_index, 100); i++) {
 		duration = ktime_us_delta(times[i], times[i-1]);
 		if (duration > max_frame_delay)
 			if (duration <= 100000)
@@ -987,7 +987,8 @@ static void rockchip_ebc_partial_refresh(struct rockchip_ebc *ebc,
 				min_frame_delay = duration;
 		pr_debug("ebc: frame %i took %llu us", i, duration);
 	}
-	pr_debug("ebc: min/max frame durations: %u/%u [us]", min_frame_delay, max_frame_delay);
+	if (time_index > 2)
+		pr_debug("ebc: first frame %llu [us], min/max frame durations: %u/%u [us]", ktime_us_delta(times[1], times[0]), min_frame_delay, max_frame_delay);
 }
 
 static void rockchip_ebc_refresh(struct rockchip_ebc *ebc,
