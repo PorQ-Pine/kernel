@@ -856,9 +856,9 @@ static void rockchip_ebc_partial_refresh(struct rockchip_ebc *ebc,
 		rockchip_ebc_drm_rect_extend_rect(&clip_needs_sync, &clip_ongoing_new_areas);
 
 		if (direct_mode) {
-			if (use_neon & 4) {
+			if ((use_neon & 4) && ebc->lut.mode_index == pvi_wbf_get_mode_index(ebc->lut.file, DRM_EPD_WF_A2)) {
 				kernel_neon_begin();
-				rockchip_ebc_blit_direct_fnum_neon(
+				rockchip_ebc_blit_direct_fnum_a2_neon(
 					ctx, phase_buffer, frame_num_buffer,
 					ctx->next, ctx->prev, &ebc->lut,
 					&clip_needs_sync);

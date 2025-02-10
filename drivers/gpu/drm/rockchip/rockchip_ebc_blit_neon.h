@@ -30,7 +30,7 @@ void rockchip_ebc_update_blit_fnum_prev_neon(const struct rockchip_ebc_ctx *ctx,
 					     struct drm_rect *clip,
 					     u8 last_phase);
 
-void rockchip_ebc_blit_direct_fnum_neon(const struct rockchip_ebc_ctx *ctx,
+void rockchip_ebc_blit_direct_fnum_a2_neon(const struct rockchip_ebc_ctx *ctx,
 					u8 *phase, u8 *frame_num, u8 *next,
 					u8 *prev, const struct drm_epd_lut *lut,
 					const struct drm_rect *clip);
