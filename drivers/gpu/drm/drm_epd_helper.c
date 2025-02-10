@@ -238,7 +238,7 @@ static const void *pvi_wbf_dereference(const struct drm_epd_lut_file *file,
 	return pvi_wbf_apply_offset(file, &ptr->offset);
 }
 
-static int pvi_wbf_get_mode_index(const struct drm_epd_lut_file *file,
+int pvi_wbf_get_mode_index(const struct drm_epd_lut_file *file,
 				  enum drm_epd_waveform waveform)
 {
 	if (waveform >= DRM_EPD_WF_MAX)
@@ -246,6 +246,7 @@ static int pvi_wbf_get_mode_index(const struct drm_epd_lut_file *file,
 
 	return file->mode_info->modes[waveform];
 }
+EXPORT_SYMBOL(pvi_wbf_get_mode_index);
 
 static int pvi_wbf_get_mode_info(struct drm_epd_lut_file *file)
 {

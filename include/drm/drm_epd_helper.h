@@ -87,6 +87,9 @@ struct drm_epd_lut {
 	int				temp_index;
 };
 
+int pvi_wbf_get_mode_index(const struct drm_epd_lut_file *file,
+				  enum drm_epd_waveform waveform);
+
 int drmm_epd_lut_file_init(struct drm_device *dev,
 			   struct drm_epd_lut_file *file,
 			   const char *file_name);

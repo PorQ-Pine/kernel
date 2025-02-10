@@ -270,8 +270,8 @@ void rockchip_ebc_blit_direct_fnum(const struct rockchip_ebc_ctx *ctx,
 	unsigned int frame_num_pitch = ctx->frame_num_pitch;
 	unsigned int x, y;
 	// 8 byte alignment for neon
-	unsigned int x_start = max(0, min(clip->x1 & ~15, (int) ctx->frame_num_pitch - 32));
-	unsigned int x_end = min((int) ctx->frame_num_pitch, (clip->x2 + 31) & ~15);
+	unsigned int x_start = max(0, min(clip->x1 & ~31, (int) ctx->frame_num_pitch - 32));
+	unsigned int x_end = min((int) ctx->frame_num_pitch, (clip->x2 + 31) & ~31);
 
 	u8 *phase_line = phase + clip->y1 * phase_pitch + x_start / 4;
 	u8 *next_line = next + clip->y1 * gray4_pitch + x_start / 2;

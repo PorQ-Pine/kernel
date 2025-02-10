@@ -269,7 +269,7 @@ void rockchip_ebc_blit_fb_xrgb8888_y4_dithered2_neon(
 }
 EXPORT_SYMBOL(rockchip_ebc_blit_fb_xrgb8888_y4_dithered2_neon);
 
-void rockchip_ebc_blit_direct_fnum_neon(const struct rockchip_ebc_ctx *ctx,
+void rockchip_ebc_blit_direct_fnum_a2_neon(const struct rockchip_ebc_ctx *ctx,
 					u8 *phase, u8 *frame_num, u8 *next,
 					u8 *prev, const struct drm_epd_lut *lut,
 					const struct drm_rect *clip)
@@ -280,43 +280,83 @@ void rockchip_ebc_blit_direct_fnum_neon(const struct rockchip_ebc_ctx *ctx,
 	unsigned int x, y;
 
 	// 8 byte alignment for neon
-	unsigned int x_start = max(0, min(clip->x1 & ~15, (int) ctx->frame_num_pitch - 32));
-	unsigned int x_end = min((int) ctx->frame_num_pitch, (clip->x2 + 31) & ~15);
+	unsigned int x_start = max(0, min(clip->x1 & ~31, (int) ctx->frame_num_pitch - 32));
+	unsigned int x_end = min((int) ctx->frame_num_pitch, ((clip->x2 + 31) & ~31));
 
+	u8 wf_15to0 = ((const u32 *)lut->buf)[0xf] & 0x3;
+	u8 wf_0to15 = (((const u32 *)lut->buf)[0] >> 30) & 0x3;
+	// Duplicate for masking
+	wf_15to0 |= (wf_15to0 << 2) | (wf_15to0 << 4) | wf_15to0 << 6;
+	wf_0to15 |= (wf_0to15 << 2) | (wf_0to15 << 4) | wf_0to15 << 6;
 	u8 *phase_line = phase + clip->y1 * phase_pitch + x_start / 4;
 	u8 *next_line = next + clip->y1 * gray4_pitch + x_start / 2;
 	u8 *prev_line = prev + clip->y1 * gray4_pitch + x_start / 2;
 	u8 *fnum_line = frame_num + clip->y1 * frame_num_pitch + x_start;
+
+	// pr_debug("%s wf15to0=%d wf_0to15=%d x_start=%d x_end=%d " DRM_RECT_FMT, __func__, wf_15to0, wf_0to15, x_start, x_end, DRM_RECT_ARG(clip));
+	uint8x16_t q8_last_phase = vdupq_n_u8(lut->num_phases - 1);
+	uint8x16_t q8_0x04 = vdupq_n_u8(0x04);
+	uint8x16_t q8_wf_15to0 = vdupq_n_u8(wf_15to0);
+	uint8x16_t q8_wf_0to15 = vdupq_n_u8(wf_0to15);
+	uint8x8_t q8s_0x0f = vdup_n_u8(0x0f);
+	uint8x8_t q8s_0xf0 = vdup_n_u8(0xf0);
 	/* Each byte in the phase buffer [DCBA] maps to a horizontal block of four pixels in Y4 format [BA] [DC] */
 	for (y = clip->y1; y < clip->y2; ++y, next_line += gray4_pitch, prev_line += gray4_pitch, phase_line += phase_pitch, fnum_line += frame_num_pitch) {
+		u8 *phase_elm = phase_line;
+		u16 *fnum_elm = (u16 *) fnum_line;
 		u8 *next_elm = next_line;
 		u8 *prev_elm = prev_line;
-		u8 *phase_elm = phase_line;
-		u8 *fnum_elm = fnum_line;
-		for (x = x_start; x < x_end; x += 4) {
-			u8 prev0 = *prev_elm++;
-			u8 next0 = *next_elm++;
-			u8 prev1 = *prev_elm++;
-			u8 next1 = *next_elm++;
-			u8 fnum0 = *fnum_elm++;
-			u8 fnum1 = *fnum_elm++;
-			u8 fnum2 = *fnum_elm++;
-			u8 fnum3 = *fnum_elm++;
+		for (x = x_start; x < x_end; x += 32, phase_elm += 8, next_elm += 16, prev_elm += 16, fnum_elm += 16) {
+			uint16x8x2_t q16x2_fnum = vld2q_u16(fnum_elm);
+			// 0xff if these need to be blitted to wf_15to0 or wf_0to15, otherwise 0x00
+			// BB AA FF EE
+			uint8x16_t q8_fnum_mask0 = vcltq_u8(vreinterpretq_u8_u16(q16x2_fnum.val[0]), q8_last_phase);
+			// DD CC HH GG
+			uint8x16_t q8_fnum_mask1 = vcltq_u8(vreinterpretq_u8_u16(q16x2_fnum.val[1]), q8_last_phase);
 
-			/*
-			 * The LUT is 256 phases * 16 next * 16 previous levels.
-			 * Each value is two bits, so the last dimension neatly
-			 * fits in a 32-bit word.
-			 */
-			u8 data = ((((const u32 *)lut->buf + 16 * fnum0)[prev0 & 0xf] >> ((next0 & 0xf) << 1)) & 0x3) << 0 |
-				  ((((const u32 *)lut->buf + 16 * fnum1)[prev0 >> 4] >> ((next0 >> 4) << 1)) & 0x3) << 2 |
-				  ((((const u32 *)lut->buf + 16 * fnum2)[prev1 & 0xf] >> ((next1 & 0xf) << 1)) & 0x3) << 4 |
-				  ((((const u32 *)lut->buf + 16 * fnum3)[prev1 >> 4] >> ((next1 >> 4) << 1)) & 0x3) << 6;
-			*phase_elm++ = data;
+			uint8x8x2_t q8sx2_next = vld2_u8(next_elm); // val[0]: BA FE JI NM, val[1]: DC HG LK PO
+			uint8x8x2_t q8sx2_prev = vld2_u8(prev_elm);
+
+			// BB AA FF EE
+			uint8x16_t q8_cnt_next0 = vcntq_u8(vreinterpretq_u8_u16(vshll_n_u8(q8sx2_next.val[0], 4)));
+			// DD CC HH GG
+			uint8x16_t q8_cnt_next1 = vcntq_u8(vreinterpretq_u8_u16(vshll_n_u8(q8sx2_next.val[1], 4)));
+			uint8x16_t q8_cnt_prev0 = vcntq_u8(vreinterpretq_u8_u16(vshll_n_u8(q8sx2_prev.val[0], 4)));
+			uint8x16_t q8_cnt_prev1 = vcntq_u8(vreinterpretq_u8_u16(vshll_n_u8(q8sx2_prev.val[1], 4)));
+
+			// 0xff if equal to zero, otherwise 0x00
+			// BB AA FF EE JJ II NN MM
+			uint8x16_t q8_mask_next0_0 = vceqzq_u8(q8_cnt_next0);
+			// DD CC HH GG LL KK PP OO
+			uint8x16_t q8_mask_next1_0 = vceqzq_u8(q8_cnt_next1);
+			uint8x16_t q8_mask_prev0_0 = vceqzq_u8(q8_cnt_prev0);
+			uint8x16_t q8_mask_prev1_0 = vceqzq_u8(q8_cnt_prev1);
+
+			// 0xff if equal to 4 (0b00001111 has four bits set), otherwise 0x00
+			uint8x16_t q8_mask_next0_f = vceqq_u8(q8_cnt_next0, q8_0x04);
+			uint8x16_t q8_mask_next1_f = vceqq_u8(q8_cnt_next1, q8_0x04);
+			uint8x16_t q8_mask_prev0_f = vceqq_u8(q8_cnt_prev0, q8_0x04);
+			uint8x16_t q8_mask_prev1_f = vceqq_u8(q8_cnt_prev1, q8_0x04);
+
+			// bbbbbbbb aaaaaaaa ffffffff eeeeeeee
+			uint8x16_t q8_phase0 = vorrq_u8(
+				vandq_u8(q8_wf_15to0, vandq_u8(q8_fnum_mask0, vandq_u8(q8_mask_next0_0, q8_mask_prev0_f))),
+				vandq_u8(q8_wf_0to15, vandq_u8(q8_fnum_mask0, vandq_u8(q8_mask_next0_f, q8_mask_prev0_0))));
+			// dddddddd cccccccc hhhhhhhh gggggggg
+			uint8x16_t q8_phase1 = vorrq_u8(
+				vandq_u8(q8_wf_15to0, vandq_u8(q8_fnum_mask1, vandq_u8(q8_mask_next1_0, q8_mask_prev1_f))),
+				vandq_u8(q8_wf_0to15, vandq_u8(q8_fnum_mask1, vandq_u8(q8_mask_next1_f, q8_mask_prev1_0))));
+			// 0000bbaa 0000ffee
+			uint8x8_t q8s_phase0 = vand_u8(vshrn_n_u16(vreinterpretq_u16_u8(q8_phase0), 6), q8s_0x0f);
+			// ddcc0000 hhgg0000
+			uint8x8_t q8s_phase1 = vand_u8(vshrn_n_u16(vreinterpretq_u16_u8(q8_phase1), 2), q8s_0xf0);
+
+			// ddccbbaa hhggffee
+			vst1_u8(phase_elm, vorr_u8(q8s_phase0, q8s_phase1));
 		}
 	}
 }
-EXPORT_SYMBOL(rockchip_ebc_blit_direct_fnum_neon);
+EXPORT_SYMBOL(rockchip_ebc_blit_direct_fnum_a2_neon);
 
 // Increment frame_num by one within clip if < last_phase, otherwise set to 0xff.
 // In the latter case blit from next to prev. Clip can be increased for alignment
