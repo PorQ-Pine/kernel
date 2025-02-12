@@ -763,9 +763,14 @@ static void rockchip_ebc_partial_refresh(struct rockchip_ebc *ebc,
 	LIST_HEAD(areas);
 	u32 frame;
 	u64 local_area_count = 0;
-	ktime_t times[100];
+	ktime_t times_update_fnum[20];
+	ktime_t times_schedule[20];
+	ktime_t times_direct_blit[20];
+	ktime_t times_blit_last[20];
+	ktime_t times_sync[20];
+	ktime_t times_wait[20];
+	ktime_t times_end[20];
 	int time_index = 0;
-	s64 duration;
 	u32 min_frame_delay = 1000000;
 	u32 max_frame_delay = 0;
 	struct drm_rect clip_ongoing = { .x1 = 100000, .x2 = 0, .y1 = 100000, .y2 = 0 };
@@ -801,7 +806,6 @@ static void rockchip_ebc_partial_refresh(struct rockchip_ebc *ebc,
 	ctx->final = ctx->final_buffer[ctx->ebc_buffer_index];
 	spin_unlock(&ctx->queue_lock);
 
-	times[time_index++] = ktime_get();
 	for (frame = 0;; frame++) {
 		u8 *phase_buffer = ctx->phase[frame % 2];
 		u8 *frame_num_buffer = ctx->frame_num[frame % 2];
@@ -812,6 +816,7 @@ static void rockchip_ebc_partial_refresh(struct rockchip_ebc *ebc,
 		// Used to reset the second phase buffer in direct mode after last_phase
 		struct drm_rect clip_needs_sync = clip_ongoing;
 
+		times_update_fnum[time_index] = ktime_get();
 		if (frame > 0) {
 			// Increase frame number of running frames by one
 			if (use_neon & 1) {
@@ -830,6 +835,7 @@ static void rockchip_ebc_partial_refresh(struct rockchip_ebc *ebc,
 					&clip_ongoing, last_phase);
 			}
 		}
+		times_schedule[time_index] = ktime_get();
 
 		list_for_each_entry_safe(area, next_area, &areas, list) {
 			if (area->frame_begin == EBC_FRAME_PENDING || area->frame_begin == frame) {
@@ -860,6 +866,7 @@ static void rockchip_ebc_partial_refresh(struct rockchip_ebc *ebc,
 				}
 			}
 		}
+		times_direct_blit[time_index] = ktime_get();
 
 		rockchip_ebc_drm_rect_extend_rect(&clip_ongoing_new_areas, &clip_ongoing);
 		rockchip_ebc_drm_rect_extend_rect(&clip_needs_sync, &clip_ongoing_new_areas);
@@ -880,6 +887,7 @@ static void rockchip_ebc_partial_refresh(struct rockchip_ebc *ebc,
 					&clip_needs_sync);
 			}
 		}
+		times_blit_last[time_index] = ktime_get();
 
 		// Blit pixels of next to prev that are at last_phase (0xff)
 		if (use_neon & 1) {
@@ -889,6 +897,7 @@ static void rockchip_ebc_partial_refresh(struct rockchip_ebc *ebc,
 				   &clip_ongoing, last_phase))
 			sync_prev = true;
 
+		times_sync[time_index] = ktime_get();
 		if (direct_mode) {
 			int win_start = clip_needs_sync.y1 * ctx->phase_pitch + clip_needs_sync.x1 / 4;
 			int win_end = clip_needs_sync.y2 * ctx->phase_pitch + (clip_needs_sync.x2 + 3) / 4;
@@ -912,14 +921,15 @@ static void rockchip_ebc_partial_refresh(struct rockchip_ebc *ebc,
 					dev, prev_handle + win_start,
 					win_end - win_start, DMA_TO_DEVICE);
 		}
+		times_wait[time_index] = ktime_get();
 
 		if (frame > 0 && !wait_for_completion_timeout(
 					 &ebc->display_end, EBC_FRAME_TIMEOUT))
 			drm_err(drm, "Frame %d timed out!\n", frame);
+		times_end[time_index] = ktime_get();
 
-		// record time after frame completed
-		if (time_index < 100) {
-			times[time_index++] = ktime_get();
+		if (time_index < 19) {
+			time_index++;
 		}
 
 		if (drm_rect_width(&clip_needs_sync) <= 0)
@@ -996,19 +1006,34 @@ static void rockchip_ebc_partial_refresh(struct rockchip_ebc *ebc,
 
 	ctx->area_count += local_area_count;
 
-	// print the min/max execution times from within the first 100 frames
-	for (int i=2; i < min(time_index, 100); i++) {
-		duration = ktime_us_delta(times[i], times[i-1]);
-		if (duration > max_frame_delay)
-			if (duration <= 100000)
-					max_frame_delay = duration;
-		if (duration < min_frame_delay)
-			if (duration <= 100000)
-				min_frame_delay = duration;
-		pr_debug("ebc: frame %i took %llu us", i, duration);
+	// print the min/max execution times from within the first 20 frames
+	for (int i=0; i < min(time_index, 20); i++) {
+		u64 delta_update_fnum = ktime_us_delta(times_schedule[i], times_update_fnum[i]);
+		u64 delta_schedule = ktime_us_delta(times_direct_blit[i], times_schedule[i]);
+		u64 delta_direct_blit = ktime_us_delta(times_blit_last[i], times_direct_blit[i]);
+		u64 delta_blit_last = ktime_us_delta(times_sync[i], times_blit_last[i]);
+		u64 delta_sync = ktime_us_delta(times_wait[i], times_sync[i]);
+		u64 delta_wait = ktime_us_delta(times_end[i], times_wait[i]);
+		u64 delta_frame = ktime_us_delta(times_end[i], times_end[max(i-1, 0)]);
+		u64 work_total = delta_update_fnum + delta_schedule + delta_direct_blit + delta_blit_last + delta_sync;
+		if (delta_frame > max_frame_delay)
+			if (delta_frame <= 100000)
+					max_frame_delay = delta_frame;
+		if (delta_frame < min_frame_delay && delta_frame > 0)
+			if (delta_frame <= 100000)
+				min_frame_delay = delta_frame;
+		pr_debug("ebc: frame %i took %llu us", i, delta_frame);
+		pr_debug(
+			"ebc: frame %i [us]: update_fnum=%llu schedule=%llu direct_blit=%llu blit_last=%llu sync=%llu wait=%llu frame=%llu work_total=%llu",
+			i, delta_update_fnum, delta_schedule, delta_direct_blit,
+			delta_blit_last, delta_sync, delta_wait, delta_frame,
+			work_total);
 	}
 	if (time_index > 2)
-		pr_debug("ebc: first frame %llu [us], min/max frame durations: %u/%u [us]", ktime_us_delta(times[1], times[0]), min_frame_delay, max_frame_delay);
+		pr_debug(
+			"ebc: first frame %llu [us], min/max frame durations: %u/%u [us]",
+			ktime_us_delta(times_end[1], times_end[0]),
+			min_frame_delay, max_frame_delay);
 }
 
 static void rockchip_ebc_refresh(struct rockchip_ebc *ebc,
