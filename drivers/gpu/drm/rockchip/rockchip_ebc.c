@@ -207,6 +207,10 @@ static int default_waveform = DRM_EPD_WF_GC16;
 module_param(default_waveform, int, 0644);
 MODULE_PARM_DESC(default_waveform, "waveform to use for display updates");
 
+static int shorten_a2_waveform = 0;
+module_param(shorten_a2_waveform, int, 0644);
+MODULE_PARM_DESC(shorten_a2_waveform, "number of frames to shorten the A2 waveform by in neon mode");
+
 static bool shrink_virtual_window = false;
 module_param(shrink_virtual_window, bool, 0644);
 MODULE_PARM_DESC(shrink_virtual_window, "shrink virtual window to ongoing clip");
@@ -765,6 +769,7 @@ static void rockchip_ebc_partial_refresh(struct rockchip_ebc *ebc,
 	u32 min_frame_delay = 1000000;
 	u32 max_frame_delay = 0;
 	struct drm_rect clip_ongoing = { .x1 = 100000, .x2 = 0, .y1 = 100000, .y2 = 0 };
+	u8 local_shorten_a2_waveform = 0;
 
 	dma_addr_t win_handles[2];
 	win_handles[0] = dma_map_single(
@@ -778,6 +783,11 @@ static void rockchip_ebc_partial_refresh(struct rockchip_ebc *ebc,
 		ctx->mapped_win_size, DMA_TO_DEVICE);
 	if (dma_mapping_error(dev, win_handles[1])) {
 		drm_err(drm, "win_handles[1] dma mapping error");
+	}
+
+	if ((use_neon & 4) && ebc->lut.mode_index == pvi_wbf_get_mode_index(ebc->lut.file, DRM_EPD_WF_A2)) {
+		local_shorten_a2_waveform = shorten_a2_waveform;
+		last_phase -= min(local_shorten_a2_waveform, last_phase - 1);
 	}
 
 	/* Move the queued damage areas to the local list. */
@@ -860,6 +870,7 @@ static void rockchip_ebc_partial_refresh(struct rockchip_ebc *ebc,
 				rockchip_ebc_blit_direct_fnum_a2_neon(
 					ctx, phase_buffer, frame_num_buffer,
 					ctx->next, ctx->prev, &ebc->lut,
+					local_shorten_a2_waveform,
 					&clip_needs_sync);
 				kernel_neon_end();
 			} else {
