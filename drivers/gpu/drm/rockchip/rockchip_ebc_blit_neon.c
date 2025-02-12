@@ -272,6 +272,7 @@ EXPORT_SYMBOL(rockchip_ebc_blit_fb_xrgb8888_y4_dithered2_neon);
 void rockchip_ebc_blit_direct_fnum_a2_neon(const struct rockchip_ebc_ctx *ctx,
 					u8 *phase, u8 *frame_num, u8 *next,
 					u8 *prev, const struct drm_epd_lut *lut,
+					u8 a2_shorten_waveform,
 					const struct drm_rect *clip)
 {
 	unsigned int phase_pitch = ctx->phase_pitch;
@@ -294,7 +295,7 @@ void rockchip_ebc_blit_direct_fnum_a2_neon(const struct rockchip_ebc_ctx *ctx,
 	u8 *fnum_line = frame_num + clip->y1 * frame_num_pitch + x_start;
 
 	// pr_debug("%s wf15to0=%d wf_0to15=%d x_start=%d x_end=%d " DRM_RECT_FMT, __func__, wf_15to0, wf_0to15, x_start, x_end, DRM_RECT_ARG(clip));
-	uint8x16_t q8_last_phase = vdupq_n_u8(lut->num_phases - 1);
+	uint8x16_t q8_last_phase = vdupq_n_u8(lut->num_phases - 1 - min(lut->num_phases - 1, a2_shorten_waveform));
 	uint8x16_t q8_0x04 = vdupq_n_u8(0x04);
 	uint8x16_t q8_wf_15to0 = vdupq_n_u8(wf_15to0);
 	uint8x16_t q8_wf_0to15 = vdupq_n_u8(wf_0to15);
