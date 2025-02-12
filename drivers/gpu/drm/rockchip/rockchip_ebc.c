@@ -911,21 +911,17 @@ static void rockchip_ebc_partial_refresh(struct rockchip_ebc *ebc,
 			times[time_index++] = ktime_get();
 		}
 
-		if (use_neon & 1) {
-			if (drm_rect_width(&clip_needs_sync) <= 0)
-				break;
-		} else {
-			if (drm_rect_width(&clip_ongoing) <= 0)
-				break;
-		}
+		if (drm_rect_width(&clip_needs_sync) <= 0)
+			break;
 
 		if (shrink_virtual_window) {
-			u16 adj_win_width = ((clip_ongoing.x2 + 7) & ~7) - (clip_ongoing.x1 & ~7);
-			unsigned int win_start_offset = ebc->act_width * clip_ongoing.y1 + (clip_ongoing.x1 & ~7);
-			regmap_write(ebc->regmap, EBC_WIN_VIR, EBC_WIN_VIR_WIN_VIR_HEIGHT(drm_rect_height(&clip_ongoing)) | EBC_WIN_VIR_WIN_VIR_WIDTH(ctx->gray4_pitch * 2));
-			regmap_write(ebc->regmap, EBC_WIN_ACT, EBC_WIN_ACT_WIN_ACT_HEIGHT(drm_rect_height(&clip_ongoing)) | EBC_WIN_ACT_WIN_ACT_WIDTH(adj_win_width));
-			regmap_write(ebc->regmap, EBC_WIN_DSP, EBC_WIN_DSP_WIN_DSP_HEIGHT(drm_rect_height(&clip_ongoing)) | EBC_WIN_DSP_WIN_DSP_WIDTH(adj_win_width));
-			regmap_write(ebc->regmap, EBC_WIN_DSP_ST, EBC_WIN_DSP_ST_WIN_DSP_YST(ebc->vact_start + clip_ongoing.y1) | EBC_WIN_DSP_ST_WIN_DSP_XST(ebc->hact_start + clip_ongoing.x1 / 8));
+			u16 adj_win_width = ((clip_needs_sync.x2 + 7) & ~7) - (clip_needs_sync.x1 & ~7);
+			unsigned int win_start_offset = ebc->act_width * clip_needs_sync.y1 + (clip_needs_sync.x1 & ~7);
+			pr_debug("%s clip_needs_sync=" DRM_RECT_FMT " adj_win_width=%ud win_start_offset=%ud", __func__, DRM_RECT_ARG(&clip_needs_sync), adj_win_width, win_start_offset);
+			regmap_write(ebc->regmap, EBC_WIN_VIR, EBC_WIN_VIR_WIN_VIR_HEIGHT(drm_rect_height(&clip_needs_sync)) | EBC_WIN_VIR_WIN_VIR_WIDTH(ctx->gray4_pitch * 2));
+			regmap_write(ebc->regmap, EBC_WIN_ACT, EBC_WIN_ACT_WIN_ACT_HEIGHT(drm_rect_height(&clip_needs_sync)) | EBC_WIN_ACT_WIN_ACT_WIDTH(adj_win_width));
+			regmap_write(ebc->regmap, EBC_WIN_DSP, EBC_WIN_DSP_WIN_DSP_HEIGHT(drm_rect_height(&clip_needs_sync)) | EBC_WIN_DSP_WIN_DSP_WIDTH(adj_win_width));
+			regmap_write(ebc->regmap, EBC_WIN_DSP_ST, EBC_WIN_DSP_ST_WIN_DSP_YST(ebc->vact_start + clip_needs_sync.y1) | EBC_WIN_DSP_ST_WIN_DSP_XST(ebc->hact_start + clip_needs_sync.x1 / 8));
 			if (direct_mode) {
 				regmap_write(ebc->regmap, EBC_WIN_MST0, win_handle + win_start_offset / 4);
 			} else {
