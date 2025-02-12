@@ -446,6 +446,8 @@ void rockchip_ebc_update_blit_fnum_prev_neon(const struct rockchip_ebc_ctx *ctx,
 			}
 		}
 	}
+	if (drm_rect_width(&clip_shrunk) > 0)
+		rockchip_ebc_drm_rect_extend(&clip_shrunk, ((clip_shrunk.x2 - 1) & ~31) + 32, clip_shrunk.y2);
 	*clip = clip_shrunk;
 }
 EXPORT_SYMBOL(rockchip_ebc_update_blit_fnum_prev_neon);
@@ -561,6 +563,10 @@ void rockchip_ebc_schedule_and_blit_neon(
 			pixel_count += pixel_count_inc;
 		}
 	}
+	if (drm_rect_width(&conflict) > 0)
+		rockchip_ebc_drm_rect_extend(&conflict, ((conflict.x2 - 1) & ~31) + 32, conflict.y2);
+	if (drm_rect_width(&area_started) > 0)
+		rockchip_ebc_drm_rect_extend(&area_started, ((area_started.x2 - 1) & ~31) + 32, area_started.y2);
 	area->clip = conflict;
 	area->frame_begin = frame_begin;
 	rockchip_ebc_drm_rect_extend_rect(clip_ongoing_new_areas, &area_started);
