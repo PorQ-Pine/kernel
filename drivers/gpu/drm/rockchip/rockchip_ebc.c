@@ -755,7 +755,6 @@ static void rockchip_ebc_partial_refresh(struct rockchip_ebc *ebc,
 	struct rockchip_ebc_area *area, *next_area;
 	u32 last_phase = ebc->lut.num_phases - 1;
 	struct drm_device *drm = &ebc->drm;
-	u32 gray4_size = ctx->gray4_size;
 	struct device *dev = drm->dev;
 	LIST_HEAD(areas);
 	u32 frame;
@@ -879,15 +878,29 @@ static void rockchip_ebc_partial_refresh(struct rockchip_ebc *ebc,
 				   &clip_ongoing, last_phase))
 			sync_prev = true;
 
-		// TODO: shrink these
-		if (sync_next && !direct_mode)
-			dma_sync_single_for_device(dev, next_handle, gray4_size,
+		if (direct_mode) {
+			int win_start = clip_needs_sync.y1 * ctx->phase_pitch + clip_needs_sync.x1 / 4;
+			int win_end = clip_needs_sync.y2 * ctx->phase_pitch + (clip_needs_sync.x2 + 3) / 4;
+			dma_sync_single_for_device(dev, win_handle + win_start,
+						   win_end - win_start,
 						   DMA_TO_DEVICE);
-		if (sync_prev && !direct_mode)
-			dma_sync_single_for_device(dev, prev_handle, gray4_size,
+		} else {
+			int win_start = clip_needs_sync.y1 * ctx->frame_num_pitch + clip_needs_sync.x1;
+			int win_end = clip_needs_sync.y2 * ctx->frame_num_pitch + clip_needs_sync.x2;
+			dma_sync_single_for_device(dev, win_handle + win_start,
+						   win_end - win_start,
 						   DMA_TO_DEVICE);
-		dma_sync_single_for_device(dev, win_handle,
-					   ctx->mapped_win_size, DMA_TO_DEVICE);
+			win_start = clip_needs_sync.y1 * ctx->gray4_pitch + clip_needs_sync.x1 / 2;
+			win_end = clip_needs_sync.y2 * ctx->gray4_pitch + (clip_needs_sync.x2 + 1) / 2;
+			if (sync_next)
+				dma_sync_single_for_device(
+					dev, next_handle + win_start,
+					win_end - win_start, DMA_TO_DEVICE);
+			if (sync_prev)
+				dma_sync_single_for_device(
+					dev, prev_handle + win_start,
+					win_end - win_start, DMA_TO_DEVICE);
+		}
 
 		if (frame > 0 && !wait_for_completion_timeout(
 					 &ebc->display_end, EBC_FRAME_TIMEOUT))
