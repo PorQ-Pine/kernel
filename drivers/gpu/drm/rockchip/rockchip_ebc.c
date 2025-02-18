@@ -866,9 +866,8 @@ static void rockchip_ebc_partial_refresh(struct rockchip_ebc *ebc,
 						rockchip_ebc_schedule_and_blit_neon(
 							ctx, frame_num_buffer,
 							ctx->next, ctx->final,
-							&clip_ongoing,
 							&clip_ongoing_new_areas, area,
-							frame, last_phase, next_area);
+							frame, last_phase);
 						kernel_neon_end();
 					}
 				} else {
