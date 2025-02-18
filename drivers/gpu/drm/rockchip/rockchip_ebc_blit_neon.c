@@ -574,4 +574,125 @@ void rockchip_ebc_schedule_and_blit_neon(
 }
 EXPORT_SYMBOL(rockchip_ebc_schedule_and_blit_neon);
 
+// Blit final to next within clip where final differs from next. If frame_num = 0xff, blit 0 to frame_num, o.w. last_phase - frame_num + early_cancellation_addition and set prev to ~next
+void rockchip_ebc_schedule_cancel_blit_a2_neon(
+	const struct rockchip_ebc_ctx *ctx, u8 *frame_num, u8 *prev, u8 *next,
+	u8 *final, struct drm_rect *clip_ongoing_new_areas,
+	struct rockchip_ebc_area *area, u8 last_phase,
+	u8 early_cancellation_addition)
+{
+	unsigned int gray4_pitch = ctx->gray4_pitch;
+	unsigned int frame_num_pitch = ctx->frame_num_pitch;
+	unsigned int x, y;
+	// 8 Byte alignment for neon
+	unsigned int x_start = max(0, min(area->clip.x1 & ~31, (int) ctx->frame_num_pitch - 32));
+	unsigned int pixel_count = 0;
+	struct drm_rect area_started = { .x1 = 100000, .x2 = 0, .y1 = 100000, .y2 = 0 };
+	uint8x16_t q8_0xff = vdupq_n_u8(0xff);
+	uint8x16_t q8_0x11 = vdupq_n_u8(0x11);
+	uint8x16_t q8_0x00 = vdupq_n_u8(0x00);
+	uint8x16_t q8_last_phase = vdupq_n_u8(last_phase);
+	uint8x16_t q8_early_cancellation_addition = vdupq_n_u8(early_cancellation_addition);
+	for (y = area->clip.y1; y < area->clip.y2; ++y) {
+		u8 *prev_line = prev + y * gray4_pitch + x_start / 2;
+		u8 *next_line = next + y * gray4_pitch + x_start / 2;
+		u8 *final_line = final + y * gray4_pitch + x_start / 2;
+		u16 *fnum_line = (u16 *) (frame_num + y * frame_num_pitch + x_start);
+		for (x = x_start; x < area->clip.x2; x += 32, prev_line += 16, next_line += 16, final_line += 16, fnum_line += 16) {
+			u8 pixel_count_inc = 0;
+			uint8x16_t q8_next, q8_final, q8_prev, q8_fnum1, q8_fnum2;
+			uint16x8_t q16_fnum1, q16_fnum2;
+			uint8x16_t q8_mask1_complete, q8_mask2_complete, q8_y4_mask_difference, q8_y4_mask_cancelled;
+			uint8x16_t q8_y4_mask_complete, q8_y4_mask_blitted;
+			uint8x8_t q8s_y4_mask1_complete, q8s_y4_mask2_complete;
+			uint8x16_t q8_mask1_difference, q8_mask2_difference;
+
+			// 16 bytes y4 corresponding to 32 pixels
+			// BA DC FE HG
+			q8_next = vld1q_u8(next_line);
+			q8_final = vld1q_u8(final_line);
+
+			// Check which pixels have changed. Any value between 0x0 and 0xf for each Y4
+			// BA DC FE HG
+			q8_y4_mask_difference = veorq_u8(q8_next, q8_final);
+			if (!vmaxvq_u8(q8_y4_mask_difference)) {
+				// No pixels have changed, skip block
+				continue;
+			}
+			// Convert holey Y4 mask to complete mask by widening and comparison to zero. 0xff if pixels differ, o.w. 0x00
+			// BB AA DD CC
+			q8_mask1_difference = vcgtq_u8(vreinterpretq_u8_u16(vshll_n_u8(vget_low_u8(q8_y4_mask_difference), 4)), q8_0x00);
+			q8_mask2_difference = vcgtq_u8(vreinterpretq_u8_u16(vshll_high_n_u8(q8_y4_mask_difference, 4)), q8_0x00);
+			// BA DC
+			q8_y4_mask_difference = vcombine_u8(
+				vshrn_n_u16(vreinterpretq_u16_u8(q8_mask1_difference), 4),
+				vshrn_n_u16(vreinterpretq_u16_u8(q8_mask2_difference), 4));
+
+			// 16 bytes of u8 frame numbers
+			// BBAA DDCC FFEE HHGG
+			q16_fnum1 = vld1q_u16(fnum_line);
+			// BB AA DD CC FF DD HH GG
+			q8_fnum1 = vreinterpretq_u8_u16(q16_fnum1);
+			// 0xff (not running) or 0x00 (running) for each u8
+			q8_mask1_complete = vceqq_u8(q8_fnum1, q8_0xff);
+			// BA DC FE HG
+			q8s_y4_mask1_complete = vshrn_n_u16(vreinterpretq_u16_u8(q8_mask1_complete), 4);
+
+			// Same for the next 16 frame numbers
+			q16_fnum2 = vld1q_u16(fnum_line + 8);
+			q8_fnum2 = vreinterpretq_u8_u16(q16_fnum2);
+			q8_mask2_complete = vceqq_u8(q8_fnum2, q8_0xff);
+			q8s_y4_mask2_complete = vshrn_n_u16(vreinterpretq_u16_u8(q8_mask2_complete), 4);
+
+			// Concatenate the two masks
+			q8_y4_mask_complete = vcombine_u8(q8s_y4_mask1_complete, q8s_y4_mask2_complete);
+
+			// Y4 mask of elements that need changing and do not conflict
+			q8_y4_mask_blitted = vandq_u8(q8_y4_mask_difference, q8_y4_mask_complete);
+			q8_y4_mask_cancelled = vandq_u8(q8_y4_mask_difference, vmvnq_u8(q8_y4_mask_complete));
+
+			// New prev: select conflicting pixels from next, otherwise keep prev
+			q8_prev = vld1q_u8(prev_line);
+			q8_prev = vbslq_u8(q8_y4_mask_cancelled, q8_next, q8_prev);
+			vst1q_u8(prev_line, q8_prev);
+			vst1q_u8(next_line, q8_final);
+
+			// Next, set the frame number of pixels that were blitted without conflict to 0. 0x00 if blitted, o.w. 0xff
+			uint8x16_t q8_mask1_not_blitted = vmvnq_u8(vandq_u8(q8_mask1_complete, q8_mask1_difference));
+			uint8x16_t q8_mask2_not_blitted = vmvnq_u8(vandq_u8(q8_mask2_complete, q8_mask2_difference));
+
+			uint8x16_t q8_mask1_cancelled = vandq_u8(vmvnq_u8(q8_mask1_complete), q8_mask1_difference);
+			uint8x16_t q8_mask2_cancelled = vandq_u8(vmvnq_u8(q8_mask2_complete), q8_mask2_difference);
+
+			// Compute frame number last_phase - prev_fnum - early_cancellation_addition
+			uint8x16_t q8_fnum1_cancelled = vqsubq_u8(q8_last_phase, vreinterpretq_u8_u16(q16_fnum1));
+			uint8x16_t q8_fnum2_cancelled = vqsubq_u8(q8_last_phase, vreinterpretq_u8_u16(q16_fnum2));
+			q8_fnum1_cancelled = vqsubq_u8(q8_fnum1_cancelled, q8_early_cancellation_addition);
+			q8_fnum2_cancelled = vqsubq_u8(q8_fnum2_cancelled, q8_early_cancellation_addition);
+			q8_fnum1 = vbslq_u8(q8_mask1_cancelled, q8_fnum1_cancelled, q8_fnum1);
+			q8_fnum2 = vbslq_u8(q8_mask2_cancelled, q8_fnum2_cancelled, q8_fnum2);
+
+			// And with fnum_data to zero the frame numbers of pixels that start now
+			q16_fnum1 = vandq_u16(vreinterpretq_u16_u8(q8_fnum1), vreinterpretq_u16_u8(q8_mask1_not_blitted));
+			q16_fnum2 = vandq_u16(vreinterpretq_u16_u8(q8_fnum2), vreinterpretq_u16_u8(q8_mask2_not_blitted));
+			vst1q_u16(fnum_line, q16_fnum1);
+			vst1q_u16(fnum_line + 8, q16_fnum2);
+
+			// Update tracked regions
+			pixel_count_inc = vaddvq_u8(vcntq_u8(vandq_u8(vorrq_u8(q8_y4_mask_blitted, q8_y4_mask_cancelled), q8_0x11)));
+			// At least one pixel from this block was started
+			if (pixel_count_inc) {
+				rockchip_ebc_drm_rect_extend(&area_started, x, y);
+			}
+			pixel_count += pixel_count_inc;
+		}
+	}
+	if (drm_rect_width(&area_started) > 0)
+		rockchip_ebc_drm_rect_extend(&area_started, ((area_started.x2 - 1) & ~31) + 31, area_started.y2 - 1);
+	// Make sure the area gets deleted
+	area->clip = (struct drm_rect) { .x1 = 100000, .x2 = 0, .y1 = 100000, .y2 = 0 };
+	rockchip_ebc_drm_rect_extend_rect(clip_ongoing_new_areas, &area_started);
+}
+EXPORT_SYMBOL(rockchip_ebc_schedule_cancel_blit_a2_neon);
+
 MODULE_LICENSE("GPL v2");
