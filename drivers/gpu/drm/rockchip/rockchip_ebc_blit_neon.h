@@ -48,4 +48,10 @@ void rockchip_ebc_schedule_and_blit_neon(
 	struct drm_rect *clip_ongoing_new_areas, struct rockchip_ebc_area *area,
 	u32 frame, u8 last_phase, struct rockchip_ebc_area *next_area);
 
+void rockchip_ebc_schedule_cancel_blit_a2_neon(
+	const struct rockchip_ebc_ctx *ctx, u8 *frame_num, u8 *prev, u8 *next,
+	u8 *final, struct drm_rect *clip_ongoing_new_areas,
+	struct rockchip_ebc_area *area, u8 last_phase,
+	u8 early_cancellation_addition);
+
 #endif /* _ROCKCHIP_EBC_BLIT_NEON_H */

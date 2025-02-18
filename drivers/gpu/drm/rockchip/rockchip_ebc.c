@@ -211,6 +211,14 @@ static int shorten_a2_waveform = 0;
 module_param(shorten_a2_waveform, int, 0644);
 MODULE_PARM_DESC(shorten_a2_waveform, "number of frames to shorten the A2 waveform by in neon mode");
 
+static bool early_cancellation = false;
+module_param(early_cancellation, bool, 0644);
+MODULE_PARM_DESC(early_cancellation, "allow cancelling ongoing A2 updates");
+
+static int early_cancellation_addition = 0;
+module_param(early_cancellation_addition, int, 0644);
+MODULE_PARM_DESC(early_cancellation_addition, "number of additional frames to drive a pixel when cancelling it");
+
 static bool shrink_virtual_window = false;
 module_param(shrink_virtual_window, bool, 0644);
 MODULE_PARM_DESC(shrink_virtual_window, "shrink virtual window to ongoing clip");
@@ -775,6 +783,7 @@ static void rockchip_ebc_partial_refresh(struct rockchip_ebc *ebc,
 	u32 max_frame_delay = 0;
 	struct drm_rect clip_ongoing = { .x1 = 100000, .x2 = 0, .y1 = 100000, .y2 = 0 };
 	u8 local_shorten_a2_waveform = 0;
+	bool wf_is_a2 = ebc->lut.mode_index == pvi_wbf_get_mode_index(ebc->lut.file, DRM_EPD_WF_A2);
 
 	dma_addr_t win_handles[2];
 	win_handles[0] = dma_map_single(
@@ -790,7 +799,7 @@ static void rockchip_ebc_partial_refresh(struct rockchip_ebc *ebc,
 		drm_err(drm, "win_handles[1] dma mapping error");
 	}
 
-	if ((use_neon & 4) && ebc->lut.mode_index == pvi_wbf_get_mode_index(ebc->lut.file, DRM_EPD_WF_A2)) {
+	if ((use_neon & 4) && wf_is_a2) {
 		local_shorten_a2_waveform = shorten_a2_waveform;
 		last_phase -= min(local_shorten_a2_waveform, last_phase - 1);
 	}
@@ -841,14 +850,27 @@ static void rockchip_ebc_partial_refresh(struct rockchip_ebc *ebc,
 			if (area->frame_begin == EBC_FRAME_PENDING || area->frame_begin == frame) {
 				pr_debug("%s schedul1 %d " DRM_RECT_FMT " " DRM_RECT_FMT, __func__, frame, DRM_RECT_ARG(&area->clip), DRM_RECT_ARG(&clip_ongoing_new_areas));
 				if (use_neon & 2) {
-					kernel_neon_begin();
-					rockchip_ebc_schedule_and_blit_neon(
-						ctx, frame_num_buffer,
-						ctx->next, ctx->final,
-						&clip_ongoing,
-						&clip_ongoing_new_areas, area,
-						frame, last_phase, next_area);
-					kernel_neon_end();
+					// Only available in direct mode to avoid conflicts within single buffers prev/next
+					if (wf_is_a2 && early_cancellation && direct_mode) {
+						kernel_neon_begin();
+						rockchip_ebc_schedule_cancel_blit_a2_neon(
+							ctx, frame_num_buffer,
+							ctx->prev,
+							ctx->next, ctx->final,
+							&clip_ongoing_new_areas,
+							area, last_phase,
+							early_cancellation_addition);
+						kernel_neon_end();
+					} else {
+						kernel_neon_begin();
+						rockchip_ebc_schedule_and_blit_neon(
+							ctx, frame_num_buffer,
+							ctx->next, ctx->final,
+							&clip_ongoing,
+							&clip_ongoing_new_areas, area,
+							frame, last_phase, next_area);
+						kernel_neon_end();
+					}
 				} else {
 					rockchip_ebc_schedule_and_blit(
 						ctx, frame_num_buffer,
