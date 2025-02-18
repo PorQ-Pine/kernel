@@ -456,9 +456,8 @@ EXPORT_SYMBOL(rockchip_ebc_update_blit_fnum_prev_neon);
 // Blit 0 to frame_num and final to next within clip where final differs from next and frame_num is 0xff. Shrink clip to smallest conflict area.
 void rockchip_ebc_schedule_and_blit_neon(
 	const struct rockchip_ebc_ctx *ctx, u8 *frame_num, u8 *next, u8 *final,
-	const struct drm_rect *clip_ongoing,
 	struct drm_rect *clip_ongoing_new_areas, struct rockchip_ebc_area *area,
-	u32 frame, u8 last_phase, struct rockchip_ebc_area *next_area)
+	u32 frame, u8 last_phase)
 {
 	unsigned int gray4_pitch = ctx->gray4_pitch;
 	unsigned int frame_num_pitch = ctx->frame_num_pitch;

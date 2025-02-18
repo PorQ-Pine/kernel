@@ -44,9 +44,8 @@ void rockchip_ebc_blit_frame_num_neon(const struct rockchip_ebc_ctx *ctx,
 
 void rockchip_ebc_schedule_and_blit_neon(
 	const struct rockchip_ebc_ctx *ctx, u8 *frame_num, u8 *next, u8 *final,
-	const struct drm_rect *clip_ongoing,
 	struct drm_rect *clip_ongoing_new_areas, struct rockchip_ebc_area *area,
-	u32 frame, u8 last_phase, struct rockchip_ebc_area *next_area);
+	u32 frame, u8 last_phase);
 
 void rockchip_ebc_schedule_cancel_blit_a2_neon(
 	const struct rockchip_ebc_ctx *ctx, u8 *frame_num, u8 *prev, u8 *next,
