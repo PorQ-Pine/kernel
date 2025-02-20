@@ -182,6 +182,103 @@ void rockchip_ebc_blit_fb_xrgb8888_y4_thresholded4_neon(
 }
 EXPORT_SYMBOL(rockchip_ebc_blit_fb_xrgb8888_y4_thresholded4_neon);
 
+void rockchip_ebc_blit_fb_xrgb8888_y4_dithered2_texture_neon(
+	const struct rockchip_ebc_ctx *ctx, struct drm_rect *dst_clip,
+	const void *vaddr, const struct drm_framebuffer *fb,
+	const struct drm_rect *src_clip, u8 invert,
+	const u8 *dither_texture, int dither_texture_size)
+{
+	// TODO:
+	// implement invert
+	// implement bw_thresholding
+	// implement configurable threshold
+
+	unsigned int gray4_pitch = ctx->gray4_pitch;
+	unsigned int rgba_pitch = fb->pitches[0];
+
+	// 8 byte alignment for neon
+	unsigned int src_start_x = max(0, min(src_clip->x1 & ~15, (int) ctx->frame_num_pitch - 32));
+	unsigned int src_end_x = min((src_clip->x2 + 15) & ~15, (int) ctx->frame_num_pitch);
+	unsigned int dst_start_x = max(0, min((dst_clip->x2 - 1) & ~15, (int) ctx->frame_num_pitch - 16));
+	unsigned int x, y;
+
+	// Force horizontal reflection for simplicity
+	u8 *dst = ctx->final_atomic_update + dst_clip->y1 * gray4_pitch + dst_start_x / 2;
+	const u8 *src = vaddr + src_clip->y1 * rgba_pitch + src_start_x * fb->format->cpp[0];
+
+	uint8x8_t q8_yuv_r = vdup_n_u8(76);
+	uint8x8_t q8_yuv_g = vdup_n_u8(150);
+	uint8x8_t q8_yuv_b = vdup_n_u8(29);
+	for (y = src_clip->y1; y < src_clip->y2; y++) {
+		const u8 *sbuf = src;
+		u8 *dbuf = dst;
+
+		uint8x16_t q8_dither_pattern0, q8_dither_pattern1, q8_tmp;
+		if (dither_texture_size == 32) {
+			q8_dither_pattern0 = vld1q_u8(dither_texture + 32 * (y & 31) * 2);
+			q8_dither_pattern1 = vld1q_u8(dither_texture + 32 * (y & 31) * 2 + 16);
+			if (src_start_x & 16) {
+				q8_tmp = q8_dither_pattern0;
+				q8_dither_pattern0 = q8_dither_pattern1;
+				q8_dither_pattern1 = q8_tmp;
+			}
+		} else {
+			q8_dither_pattern0 = vld1q_u8(dither_texture + 16 * (y & (dither_texture_size - 1)));
+			q8_dither_pattern1 = q8_dither_pattern0;
+		}
+		for (x = src_start_x; x < src_end_x; x += 16, sbuf += 64, dbuf -= 8) {
+			uint8x8x4_t q8sx4_rgba;
+			uint8x8_t q8s_gray1, q8s_gray2;
+			uint8x16_t q8_gray;
+			uint16x8_t q16_gray;
+
+			// RGB -> Y8 using rounded YUV
+			// Load 8 RGBA values
+			q8sx4_rgba = vld4_u8(sbuf);
+			q16_gray = vmull_u8(q8_yuv_r, q8sx4_rgba.val[0]);
+			q16_gray = vmlal_u8(q16_gray, q8_yuv_g, q8sx4_rgba.val[1]);
+			q16_gray = vmlal_u8(q16_gray, q8_yuv_b, q8sx4_rgba.val[2]);
+			// Aa Bb Cc Dd lower-case bits still need to be discarded
+			q8s_gray1 = vshrn_n_u16(q16_gray, 8);
+
+			// Same for the next 8 RGBA pixels
+			q8sx4_rgba = vld4_u8(sbuf + 32);
+			q16_gray = vmull_u8(q8_yuv_r, q8sx4_rgba.val[0]);
+			q16_gray = vmlal_u8(q16_gray, q8_yuv_g, q8sx4_rgba.val[1]);
+			q16_gray = vmlal_u8(q16_gray, q8_yuv_b, q8sx4_rgba.val[2]);
+			q8s_gray2 = vshrn_n_u16(q16_gray, 8);
+
+			// Combine into single vector
+			q8_gray = vcombine_u8(q8s_gray1, q8s_gray2);
+
+			// Either here or after Y8 -> Y4: dithering or thresholding
+			q8_gray = vcgeq_u8(q8_gray, q8_dither_pattern0);
+
+			// AA BB CC DD duplicate higher bits by right shifting and inserting immediately
+			// q8_gray = vsriq_n_u8(q8_gray, q8_gray, 4);
+
+			// BB AA DD CC
+			q8_gray = vrev16q_u8(q8_gray);
+			// BBAA DDCC
+			q16_gray = vreinterpretq_u16_u8(q8_gray);
+			// BA DC
+			q8s_gray1 = vshrn_n_u16(q16_gray, 4);
+
+			q8s_gray1 =  vrev64_u8(q8s_gray1);
+			vst1_u8(dbuf, q8s_gray1);
+
+			// Swap to support 32x32 dithering textures
+			q8_tmp = q8_dither_pattern0;
+			q8_dither_pattern0 = q8_dither_pattern1;
+			q8_dither_pattern1 = q8_tmp;
+		}
+
+		src += rgba_pitch;
+		dst += gray4_pitch;
+	}
+}
+EXPORT_SYMBOL(rockchip_ebc_blit_fb_xrgb8888_y4_dithered2_texture_neon);
+
 void rockchip_ebc_blit_fb_xrgb8888_y4_dithered2_neon(
 	const struct rockchip_ebc_ctx *ctx, struct drm_rect *dst_clip,
 	const void *vaddr, const struct drm_framebuffer *fb,
