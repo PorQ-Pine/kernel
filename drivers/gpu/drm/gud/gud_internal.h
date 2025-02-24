@@ -155,6 +155,8 @@ static inline void gud_to_display_mode(struct drm_display_mode *dst,
 	dst->hsync_start = le16_to_cpu(src->hsync_start);
 	dst->hsync_end = le16_to_cpu(src->hsync_end);
 	dst->htotal = le16_to_cpu(src->htotal);
+	// Workaround for PineNote
+	dst->hskew = 64;
 	dst->vdisplay = le16_to_cpu(src->vdisplay);
 	dst->vsync_start = le16_to_cpu(src->vsync_start);
 	dst->vsync_end = le16_to_cpu(src->vsync_end);
