@@ -15,7 +15,9 @@
 #include <drm/drm_client.h>
 #include <drm/drm_connector.h>
 #include <drm/drm_crtc.h>
+#include <drm/drm_edid.h>
 #include <drm/drm_fourcc.h>
+#include <drm/drm_framebuffer.h>
 #include <drm/drm_mode_object.h>
 #include <drm/drm_plane.h>
 #include <drm/drm_rect.h>
@@ -392,7 +394,7 @@ static size_t gud_gadget_write_buffer_memcpy(struct drm_client_buffer *buffer,
 	unsigned int cpp = buffer->fb->format->cpp[0];
 	size_t src_pitch = drm_rect_width(rect) * cpp;
 	size_t dst_pitch = buffer->fb->pitches[0];
-	struct dma_buf_map dst;
+	struct iosys_map dst;
 	unsigned int y;
 	int ret;
 
@@ -400,12 +402,12 @@ static size_t gud_gadget_write_buffer_memcpy(struct drm_client_buffer *buffer,
 	if (ret)
 		return len;
 
-	dma_buf_map_incr(&dst, rect->y1 * dst_pitch + rect->x1 * cpp);
+	iosys_map_incr(&dst, rect->y1 * dst_pitch + rect->x1 * cpp);
 
 	for (y = 0; y < drm_rect_height(rect) && len; y++) {
 		src_pitch = min(src_pitch, len);
-		dma_buf_map_memcpy_to(&dst, src, src_pitch);
-		dma_buf_map_incr(&dst, dst_pitch);
+		iosys_map_memcpy_to(&dst, 0, src, src_pitch);
+		iosys_map_incr(&dst, dst_pitch);
 		src += src_pitch;
 		len -= src_pitch;
 	}
