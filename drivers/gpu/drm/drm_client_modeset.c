@@ -1205,7 +1205,7 @@ retry:
 	for (i = 0; i < client->num_properties; i++) {
 		struct drm_client_property *prop = &client->properties[i];
 
-		ret = drm_atomic_set_property(state, NULL, prop->obj, prop->prop, prop->value);
+		ret = drm_atomic_set_property(state, NULL, prop->obj, prop->prop, prop->value, false);
 		if (ret)
 			goto out_state;
 	}
