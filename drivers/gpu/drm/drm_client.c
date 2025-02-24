@@ -123,7 +123,7 @@ int drm_client_init_from_id(unsigned int minor_id, struct drm_client_dev *client
 	struct drm_minor *minor;
 	int ret;
 
-	minor = drm_minor_acquire(minor_id);
+	minor = drm_minor_acquire(&drm_minors_xa, minor_id);
 	if (IS_ERR(minor))
 		return PTR_ERR(minor);
 
