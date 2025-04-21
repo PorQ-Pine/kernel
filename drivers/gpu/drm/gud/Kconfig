@@ -13,3 +13,9 @@ config DRM_GUD
 	  adapters.
 
 	  If M is selected the module will be called gud.
+
+config DRM_GUD_GADGET
+	tristate
+	depends on DRM
+	select LZ4_DECOMPRESS
+	select BACKLIGHT_CLASS_DEVICE

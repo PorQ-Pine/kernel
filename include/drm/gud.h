@@ -332,4 +332,16 @@ struct gud_state_req {
 /* Enable/disable display/output (DPMS), value is u8: 0/1 */
 #define GUD_REQ_SET_DISPLAY_ENABLE			0x64
 
+struct gud_gadget;
+
+struct gud_gadget *gud_gadget_init(unsigned int minor_id, const char *backlight,
+				   size_t *max_buffer_size, u8 compression, u8 *formats,
+				   u32 connectors);
+void gud_gadget_fini(struct gud_gadget *gdg);
+int gud_gadget_disable_pipe(struct gud_gadget *gdg);
+int gud_gadget_req_get(struct gud_gadget *gdg, u8 request, u16 index, void *data, size_t size);
+int gud_gadget_req_set(struct gud_gadget *gdg, u8 request, u16 index, const void *data, size_t size);
+int gud_gadget_req_set_buffer(struct gud_gadget *gdg, const struct gud_set_buffer_req *req);
+int gud_gadget_write_buffer(struct gud_gadget *gdg, const void *buf, size_t len);
+
 #endif

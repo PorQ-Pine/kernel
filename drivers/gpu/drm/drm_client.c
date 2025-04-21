@@ -105,6 +105,36 @@ err_free:
 EXPORT_SYMBOL(drm_client_init);
 
 /**
+ * drm_client_init_from_id - Initialise a DRM client
+ * @minor_id: DRM minor id
+ * @client: DRM client
+ * @name: Client name
+ * @funcs: DRM client functions (optional)
+ *
+ * This function looks up the drm_device using the minor id and initializes the
+ * client using drm_client_init().
+ *
+ * Returns:
+ * Zero on success or negative error code on failure.
+ */
+int drm_client_init_from_id(unsigned int minor_id, struct drm_client_dev *client,
+			    const char *name, const struct drm_client_funcs *funcs)
+{
+	struct drm_minor *minor;
+	int ret;
+
+	minor = drm_minor_acquire(&drm_minors_xa, minor_id);
+	if (IS_ERR(minor))
+		return PTR_ERR(minor);
+
+	ret = drm_client_init(minor->dev, client, name, funcs);
+	drm_minor_release(minor);
+
+	return ret;
+}
+EXPORT_SYMBOL(drm_client_init_from_id);
+
+/**
  * drm_client_register - Register client
  * @client: DRM client
  *
@@ -117,11 +147,19 @@ EXPORT_SYMBOL(drm_client_init);
  * Registering a client generates a hotplug event that allows the client
  * to set up its display from pre-existing outputs. The client must have
  * initialized its state to able to handle the hotplug event successfully.
+ *
+ * Returns:
+ * True if the client has been registered, false if the DRM device has already
+ * been unregistered.
  */
-void drm_client_register(struct drm_client_dev *client)
+bool drm_client_register(struct drm_client_dev *client)
 {
 	struct drm_device *dev = client->dev;
+	int idx;
 	int ret;
+
+	if (!drm_dev_enter(client->dev, &idx))
+		return false;
 
 	mutex_lock(&dev->clientlist_mutex);
 	list_add(&client->list, &dev->clientlist);
@@ -142,6 +180,10 @@ void drm_client_register(struct drm_client_dev *client)
 			drm_dbg_kms(dev, "client hotplug ret=%d\n", ret);
 	}
 	mutex_unlock(&dev->clientlist_mutex);
+
+	drm_dev_exit(idx);
+
+	return true;
 }
 EXPORT_SYMBOL(drm_client_register);
 

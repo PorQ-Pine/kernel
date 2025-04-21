@@ -17,6 +17,7 @@ struct drm_file;
 struct drm_framebuffer;
 struct drm_gem_object;
 struct drm_minor;
+struct drm_property;
 struct module;
 
 /**
@@ -94,6 +95,26 @@ struct drm_client_funcs {
 };
 
 /**
+ * struct drm_client_property - DRM client property
+ */
+struct drm_client_property {
+	/**
+	 * @obj: DRM Mode Object to which the property belongs.
+	 */
+	struct drm_mode_object *obj;
+
+	/**
+	 * @prop: DRM Property.
+	 */
+	struct drm_property *prop;
+
+	/**
+	 * @value: Property value.
+	 */
+	u64 value;
+};
+
+/**
  * struct drm_client_dev - DRM client instance
  */
 struct drm_client_dev {
@@ -126,7 +147,7 @@ struct drm_client_dev {
 	struct drm_file *file;
 
 	/**
-	 * @modeset_mutex: Protects @modesets.
+	 * @modeset_mutex: Protects @modesets and @properties.
 	 */
 	struct mutex modeset_mutex;
 
@@ -151,6 +172,16 @@ struct drm_client_dev {
 	bool hotplug_pending;
 
 	/**
+	 * @properties: DRM properties attached to the configuration.
+	 */
+	struct drm_client_property *properties;
+
+	/**
+	 * @num_properties: Number of attached properties.
+	 */
+	unsigned int num_properties;
+
+	/**
 	 * @hotplug_failed:
 	 *
 	 * Set by client hotplug helpers if the hotplugging failed
@@ -161,8 +192,10 @@ struct drm_client_dev {
 
 int drm_client_init(struct drm_device *dev, struct drm_client_dev *client,
 		    const char *name, const struct drm_client_funcs *funcs);
+int drm_client_init_from_id(unsigned int minor_id, struct drm_client_dev *client,
+		    const char *name, const struct drm_client_funcs *funcs);
 void drm_client_release(struct drm_client_dev *client);
-void drm_client_register(struct drm_client_dev *client);
+bool drm_client_register(struct drm_client_dev *client);
 
 /**
  * struct drm_client_buffer - DRM client buffer
@@ -215,11 +248,17 @@ void drm_client_buffer_vunmap(struct drm_client_buffer *buffer);
 int drm_client_modeset_create(struct drm_client_dev *client);
 void drm_client_modeset_free(struct drm_client_dev *client);
 int drm_client_modeset_probe(struct drm_client_dev *client, unsigned int width, unsigned int height);
+int drm_client_modeset_set(struct drm_client_dev *client, struct drm_connector *connector,
+			   struct drm_display_mode *mode, struct drm_framebuffer *fb);
+int drm_client_modeset_set_property(struct drm_client_dev *client, struct drm_mode_object *obj,
+				    struct drm_property *prop, u64 value);
+int drm_client_modeset_set_rotation(struct drm_client_dev *client, u64 value);
 bool drm_client_rotation(struct drm_mode_set *modeset, unsigned int *rotation);
 int drm_client_modeset_check(struct drm_client_dev *client);
 int drm_client_modeset_commit_locked(struct drm_client_dev *client);
 int drm_client_modeset_commit(struct drm_client_dev *client);
 int drm_client_modeset_dpms(struct drm_client_dev *client, int mode);
+int drm_client_modeset_disable(struct drm_client_dev *client);
 
 /**
  * drm_client_for_each_modeset() - Iterate over client modesets
