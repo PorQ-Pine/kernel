@@ -2308,6 +2308,29 @@ static const struct drm_display_mode eink_ed103tc2_mode[] ={
 		.flags = DRM_MODE_FLAG_PHSYNC | DRM_MODE_FLAG_NVSYNC |
 			 DRM_MODE_FLAG_HSKEW | DRM_MODE_FLAG_CLKDIV2
 	},
+	// 85 Hz
+	{
+		.clock = 266680,
+		.hdisplay = 1872,
+		.hsync_start = 1872 + 56,
+		.hsync_end = 1872 + 56 + 144,
+		.htotal = 1872 + 56 + 144 + 136,
+		.hskew = 64,
+		/* .hskew = 0, */ // <- does not work
+		/* .hskew = 10, */
+		/* .hskew = 20, */
+		/* .hskew = 30, */
+		/* .hskew = 40, */
+		/* .hskew = 50, */
+		/* .hskew = 60, */
+		/* .hskew = 70, */
+		.vdisplay = 1404,
+		.vsync_start = 1404 + 12,
+		.vsync_end = 1404 + 12 + 1,
+		.vtotal = 1404 + 12 + 1 + 4,
+		.flags = DRM_MODE_FLAG_PHSYNC | DRM_MODE_FLAG_NVSYNC |
+			 DRM_MODE_FLAG_HSKEW | DRM_MODE_FLAG_CLKDIV2
+	},
 
 /* 	/1* modes that actually take the .clock seriously *1/ */
 /* 	{ */
@@ -2367,7 +2390,7 @@ static const struct drm_display_mode eink_ed103tc2_mode[] ={
 
 static const struct panel_desc eink_ed103tc2 = {
 	.modes = eink_ed103tc2_mode,
-	.num_modes = 9,
+	.num_modes = 10,
 	.bpc = 4,
 	.size = {
 		.width = 210,
