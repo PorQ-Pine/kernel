@@ -73,7 +73,7 @@ void rockchip_ebc_schedule_advance_fast_neon(
 		u8 *packed_inner_outer_nextprev_line = ebc->packed_inner_outer_nextprev + offset * 3;
 		u8 *phases_line =
 			phase_buffer + y * phase_pitch + (x_start >> 2);
-		u8 *prelim_target_line = prelim_target + offset;
+		const u8 *prelim_target_line = prelim_target + offset;
 		uint32x2_t q32s_xy = vdup_n_u32(y << 16 | x_start);
 
 		for (unsigned int x = x_start; x < clip_ongoing_or_waiting->x2;
@@ -169,7 +169,7 @@ void rockchip_ebc_schedule_advance_fast_neon(
 					 q8_early_cancellation_addition));
 			q8_inner_new = vbslq_u8(q8_0x1f, q8_inner_num_new,
 						q8_inner_new);
-			uint8x16x3_t q8_ionp_new = {q8_inner_new, q8_outer_new, q8_next_prev_new};
+			uint8x16x3_t q8_ionp_new = {{q8_inner_new, q8_outer_new, q8_next_prev_new}};
 			vst3q_u8(packed_inner_outer_nextprev_line, q8_ionp_new);
 
 #ifdef CONFIG_DRM_ROCKCHIP_EBC_3WIN_MODE
@@ -185,7 +185,7 @@ void rockchip_ebc_schedule_advance_fast_neon(
 				uint8x8_t q8s_phases1 = vmovn_u16(q16_phases);
 				q16_phases = vreinterpretq_u16_u8(
 								  vcombine_u8(q8s_phases1, q8s_phases1));
-				uint8x8_t q8s_phases = vmovn_u16(vorrq_u8(
+				uint8x8_t q8s_phases = vmovn_u16(vorrq_u16(
 									  q16_phases, vshrq_n_u16(q16_phases, 4)));
 				__builtin_prefetch(phases_line + phases_prefetch_pitch, 1, 0);
 				vst1_lane_u32((u32 *)phases_line,
@@ -223,7 +223,7 @@ void rockchip_ebc_schedule_advance_fast_neon(
 				vorr_u8(vget_high_u8(q8_inner_new),
 					vget_low_u8(q8_inner_new)));
 			uint32x2_t q32s_mask =
-				vcgt_u64(q64s_any_ongoing, q64s_0x00);
+				vreinterpret_u32_u64(vcgt_u64(q64s_any_ongoing, q64s_0x00));
 			q16s_maxs = vmax_u16(q16s_maxs,
 					     vreinterpret_u16_u32(vand_u32(
 						     q32s_xy, q32s_mask)));
@@ -262,7 +262,7 @@ void rockchip_ebc_schedule_advance_neon(
 		ebc->pixel_pitch;
 	unsigned int prefetch_pitch = (pixel_pitch << 6) >> 6;
 	unsigned int phases_prefetch_pitch = (pixel_pitch >> 8) << 6;
-	const u8 *lut = ebc->lut_custom_active->lut;
+	u8 *lut = ebc->lut_custom_active->lut;
 	prefetch_range(lut, sizeof(struct drm_epd_lut_temp_v2));
 
 	// 16 u16 values used as addresses for non-NEON code
@@ -319,7 +319,7 @@ void rockchip_ebc_schedule_advance_neon(
 		u8 *packed_inner_outer_nextprev_line = ebc->packed_inner_outer_nextprev + offset * 3;
 		u8 *phases_line = phase_buffer + y * phase_pitch +
 				  (x_start >> (direct_mode ? 2 : 0));
-		u8 *prelim_target_line =
+		const u8 *prelim_target_line =
 			prelim_target + offset;
 		u8 *hints_line = hints + offset;
 		uint32x2_t q32s_xy = vdup_n_u32(y << 16 | x_start);
@@ -495,8 +495,8 @@ void rockchip_ebc_schedule_advance_neon(
 				vmovl_u8(vget_low_u8(q8_outer_new));
 			q16_idx_low = vaddq_u16(
 				q16_idx_low,
-				vshll_n_u8(
-					vget_low_u8(q8_prev_new),
+				vqshlq_n_u16(
+					vmovl_u8(vget_low_u8(q8_prev_new)),
 					4 + ROCKCHIP_EBC_CUSTOM_WF_SEQ_SHIFT));
 			q16_idx_low = vaddq_u16(
 				q16_idx_low,
@@ -507,8 +507,8 @@ void rockchip_ebc_schedule_advance_neon(
 				vmovl_u8(vget_high_u8(q8_outer_new));
 			q16_idx_high = vaddq_u16(
 				q16_idx_high,
-				vshll_n_u8(
-					vget_high_u8(q8_prev_new),
+				vqshlq_n_u16(
+					vmovl_u8(vget_high_u8(q8_prev_new)),
 					4 + ROCKCHIP_EBC_CUSTOM_WF_SEQ_SHIFT));
 			q16_idx_high = vaddq_u16(
 				q16_idx_high,
@@ -555,7 +555,7 @@ void rockchip_ebc_schedule_advance_neon(
 					 q8_early_cancellation_addition));
 			q8_inner_new = vbslq_u8(q8_0x1f, q8_inner_num_new,
 						q8_inner_new);
-			uint8x16x3_t q8_ionp_new = {q8_inner_new, q8_outer_new, q8_next_prev_new};
+			uint8x16x3_t q8_ionp_new = {{q8_inner_new, q8_outer_new, q8_next_prev_new}};
 			vst3q_u8(packed_inner_outer_nextprev_line, q8_ionp_new);
 
 			uint8x16_t q8_phases = vshrq_n_u8(q8_inner_new, 6);
@@ -575,7 +575,7 @@ void rockchip_ebc_schedule_advance_neon(
 				q16_phases = vreinterpretq_u16_u8(
 					vcombine_u8(q8s_phases1, q8s_phases1));
 				q8s_phases = vmovn_u16(
-					vorrq_u8(q16_phases,
+					vorrq_u16(q16_phases,
 						 vshrq_n_u16(q16_phases, 4)));
 		vst1_lane_u32((u32 *)phases_line,
 					      vreinterpret_u32_u8(q8s_phases),
@@ -731,7 +731,7 @@ void rockchip_ebc_blit_y421_y4_neon(const struct rockchip_ebc *ebc, u8 *y4_dst,
 	unsigned int x, y;
 
 	for (y = clip->y1; y < clip->y2; y++) {
-		u8 *src_line = y421_src + y * y421_pitch + x_start;
+		const u8 *src_line = y421_src + y * y421_pitch + x_start;
 		u8 *dst_line = y4_dst + y * gray4_pitch + x_start / 2;
 		for (x = x_start; x < x_end;
 		     x += 16, src_line += 16, dst_line += 8) {
@@ -779,7 +779,7 @@ void rockchip_ebc_blit_fb_rgb565_y4_hints_neon(const struct rockchip_ebc *ebc,
 			src_start_x * fb->format->cpp[0];
 	const u8 *ioctl_hints =
 		ebc->hints_ioctl + src_clip->y1 * pixel_pitch + src_start_x;
-	const u8 *hints =
+	u8 *hints =
 		hints_atomic_update + dst_clip->y1 * pixel_pitch + dst_start_x;
 
 	// Thresholds and LUT for 4-level tresholding and 2-level threshold
@@ -788,7 +788,7 @@ void rockchip_ebc_blit_fb_rgb565_y4_hints_neon(const struct rockchip_ebc *ebc,
 		vld2q_u8((u8 *)ebc->lut_y2_y4_dithered);
 	uint8x16_t q8_threshold_y1 = vdupq_n_u8(ebc->y4_threshold_y1);
 
-	u8 *dithering_texture = ebc->dithering_texture;
+	const u8 *dithering_texture = ebc->dithering_texture;
 	u8 dithering_texture_size_hint = ebc->dithering_texture_size_hint;
 
 	// (256 * (np.array([.299, .587, .114])) * [255/31, 255/63, 255/31] / [8, 4, 8]).round()
@@ -806,9 +806,9 @@ void rockchip_ebc_blit_fb_rgb565_y4_hints_neon(const struct rockchip_ebc *ebc,
 	uint8x8_t q8s_0xf8 = vdup_n_u8(0xf8);
 
 	for (y = src_clip->y1; y < src_clip->y2; y++) {
-		const u16 *fb_line = src;
+		const u16 *fb_line = (const u16 *) src;
 		u8 *prelim_target_line = dst_prelim_target;
-		u8 *ioctl_hints_line = ioctl_hints;
+		const u8 *ioctl_hints_line = ioctl_hints;
 		u8 *hints_line = hints;
 
 		uint8x16_t q8_dither_pattern0, q8_dither_pattern1, q8_tmp;
@@ -957,7 +957,7 @@ void rockchip_ebc_blit_fb_xrgb8888_y4_hints_neon(
 			src_start_x * fb->format->cpp[0];
 	const u8 *ioctl_hints =
 		ebc->hints_ioctl + src_clip->y1 * pixel_pitch + src_start_x;
-	const u8 *hints =
+	u8 *hints =
 		hints_atomic_update + dst_clip->y1 * pixel_pitch + dst_start_x;
 
 	uint8x8_t q8_yuv_r = vdup_n_u8(76);
@@ -970,7 +970,7 @@ void rockchip_ebc_blit_fb_xrgb8888_y4_hints_neon(
 		vld2q_u8((u8 *)ebc->lut_y2_y4_dithered);
 	uint8x16_t q8_threshold_y1 = vdupq_n_u8(ebc->y4_threshold_y1);
 
-	u8 *dithering_texture = ebc->dithering_texture;
+	const u8 *dithering_texture = ebc->dithering_texture;
 	u8 dithering_texture_size_hint = ebc->dithering_texture_size_hint;
 
 	uint8x16_t q8_0x02 = vdupq_n_u8(0x02);
@@ -980,9 +980,9 @@ void rockchip_ebc_blit_fb_xrgb8888_y4_hints_neon(
 	uint8x16_t q8_0x40 = vdupq_n_u8(0x40);
 
 	for (y = src_clip->y1; y < src_clip->y2; y++) {
-		const u32 *fb_line = src;
+		const u32 *fb_line = (const u32 *) src;
 		u8 *prelim_target_line = dst_prelim_target;
-		u8 *ioctl_hints_line = ioctl_hints;
+		const u8 *ioctl_hints_line = ioctl_hints;
 		u8 *hints_line = hints;
 
 		uint8x16_t q8_dither_pattern0, q8_dither_pattern1, q8_tmp;
@@ -1012,7 +1012,7 @@ void rockchip_ebc_blit_fb_xrgb8888_y4_hints_neon(
 
 			// RGB -> Y8 using rounded YUV
 			// Load 16 RGB values
-			uint8x16x4_t q8x4_rgba = vld4q_u8(fb_line);
+			uint8x16x4_t q8x4_rgba = vld4q_u8((const u8 *) fb_line);
 			q16_gray = vmull_u8(q8_yuv_r, vget_high_u8(q8x4_rgba.val[0]));
 			q16_gray =
 				vmlal_u8(q16_gray, q8_yuv_g, vget_high_u8(q8x4_rgba.val[1]));
@@ -1123,7 +1123,7 @@ void rockchip_ebc_blit_fb_r8_y4_hints_neon(const struct rockchip_ebc *ebc,
 			src_start_x * fb->format->cpp[0];
 	const u8 *ioctl_hints =
 		ebc->hints_ioctl + src_clip->y1 * pixel_pitch + src_start_x;
-	const u8 *hints =
+	u8 *hints =
 		hints_atomic_update + dst_clip->y1 * pixel_pitch + dst_start_x;
 
 	// Thresholds and LUT for 4-level tresholding and 2-level threshold
@@ -1132,7 +1132,7 @@ void rockchip_ebc_blit_fb_r8_y4_hints_neon(const struct rockchip_ebc *ebc,
 		vld2q_u8((u8 *)ebc->lut_y2_y4_dithered);
 	uint8x16_t q8_threshold_y1 = vdupq_n_u8(ebc->y4_threshold_y1);
 
-	u8 *dithering_texture = ebc->dithering_texture;
+	const u8 *dithering_texture = ebc->dithering_texture;
 	u8 dithering_texture_size_hint = ebc->dithering_texture_size_hint;
 
 	uint8x16_t q8_0x02 = vdupq_n_u8(0x02);
@@ -1144,7 +1144,7 @@ void rockchip_ebc_blit_fb_r8_y4_hints_neon(const struct rockchip_ebc *ebc,
 	for (y = src_clip->y1; y < src_clip->y2; y++) {
 		const u8 *fb_line = src;
 		u8 *prelim_target_line = dst_prelim_target;
-		u8 *ioctl_hints_line = ioctl_hints;
+		const u8 *ioctl_hints_line = ioctl_hints;
 		u8 *hints_line = hints;
 
 		uint8x16_t q8_dither_pattern0, q8_dither_pattern1, q8_tmp;
@@ -1169,7 +1169,7 @@ void rockchip_ebc_blit_fb_r8_y4_hints_neon(const struct rockchip_ebc *ebc,
 		    prelim_target_line -= 16, ioctl_hints_line += 16,
 		    hints_line -= 16) {
 			// Load 16 RGB values
-			uint16x8_t q8_gray = vld1q_u8(fb_line);
+			uint8x16_t q8_gray = vld1q_u8(fb_line);
 			/* __builtin_prefetch(fb_line + pixel_pitch, 0, 0); */
 
 			// Discard lower bits

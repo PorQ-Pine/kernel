@@ -43,7 +43,7 @@
 #include <drm/drm_rect.h>
 #include <drm/drm_simple_kms_helper.h>
 #include <drm/rockchip_ebc_drm.h>
-#include <drm/drm_fbdev_ttm.h>
+#include <drm/drm_fbdev_shmem.h>
 #include <drm/drm_framebuffer.h>
 #include <drm/clients/drm_client_setup.h>
 
@@ -447,6 +447,7 @@ static const struct drm_ioctl_desc ioctls[DRM_COMMAND_END - DRM_COMMAND_BASE] = 
 
 static const struct drm_driver rockchip_ebc_drm_driver = {
 	DRM_GEM_SHMEM_DRIVER_OPS,
+	DRM_FBDEV_SHMEM_DRIVER_OPS,
 	.major			= 0,
 	.minor			= 3,
 	.name			= "rockchip-ebc",
@@ -829,14 +830,14 @@ static void rockchip_ebc_partial_refresh(struct rockchip_ebc *ebc,
 			}
 			spin_unlock(&ctx->buffer_switch_lock);
 			// TODO: use predicted processing time based on clip_incoming, as clip_incoming can be significantly larger than the previous one
-			s64 time_ms_buffer =
+			s64 time_us_buffer =
 				switch_buffer -
 					ktime_us_delta(ktime_get(), times_wait_end[0]);
 
-			if (time_ms_buffer <= 0)
+			if (time_us_buffer <= 0)
 				break;
 
-			usleep_range(time_ms_buffer - 200, time_ms_buffer);
+			fsleep(time_us_buffer);
 		}
 
 		prelim_target = ctx->prelim_target_buffer[ctx->refresh_index];
