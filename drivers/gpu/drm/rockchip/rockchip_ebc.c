@@ -43,7 +43,7 @@
 #include <drm/drm_rect.h>
 #include <drm/drm_simple_kms_helper.h>
 #include <drm/rockchip_ebc_drm.h>
-#include <drm/drm_fbdev_ttm.h>
+#include <drm/drm_fbdev_shmem.h>
 #include <drm/drm_framebuffer.h>
 #include <drm/clients/drm_client_setup.h>
 
@@ -447,6 +447,7 @@ static const struct drm_ioctl_desc ioctls[DRM_COMMAND_END - DRM_COMMAND_BASE] = 
 
 static const struct drm_driver rockchip_ebc_drm_driver = {
 	DRM_GEM_SHMEM_DRIVER_OPS,
+	DRM_FBDEV_SHMEM_DRIVER_OPS,
 	.major			= 0,
 	.minor			= 3,
 	.name			= "rockchip-ebc",
