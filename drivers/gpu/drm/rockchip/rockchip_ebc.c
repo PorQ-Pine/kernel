@@ -829,14 +829,14 @@ static void rockchip_ebc_partial_refresh(struct rockchip_ebc *ebc,
 			}
 			spin_unlock(&ctx->buffer_switch_lock);
 			// TODO: use predicted processing time based on clip_incoming, as clip_incoming can be significantly larger than the previous one
-			s64 time_ms_buffer =
+			s64 time_us_buffer =
 				switch_buffer -
 					ktime_us_delta(ktime_get(), times_wait_end[0]);
 
-			if (time_ms_buffer <= 0)
+			if (time_us_buffer <= 0)
 				break;
 
-			usleep_range(time_ms_buffer - 200, time_ms_buffer);
+			fsleep(time_us_buffer);
 		}
 
 		prelim_target = ctx->prelim_target_buffer[ctx->refresh_index];
