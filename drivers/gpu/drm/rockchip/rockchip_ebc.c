@@ -20,6 +20,7 @@
 #include <linux/regmap.h>
 #include <linux/regulator/consumer.h>
 #include <linux/sched.h>
+#include <linux/slab.h>
 #include <linux/dma-mapping.h>
 #include <linux/uaccess.h>
 #include <linux/firmware.h>
@@ -311,6 +312,10 @@ static int hskew_override = 0;
 module_param(hskew_override, int, S_IRUGO|S_IWUSR);
 MODULE_PARM_DESC(hskew_override, "Override hskew value");
 
+static unsigned int rect_hint_batch = 20;
+module_param(rect_hint_batch, uint, S_IRUGO|S_IWUSR);
+MODULE_PARM_DESC(rect_hint_batch, "Batch size when reading rect_hints in ioctl");
+
 static int testing = 0;
 
 DEFINE_DRM_GEM_FOPS(rockchip_ebc_fops);
@@ -382,6 +387,71 @@ static int ioctl_extract_fbs(struct drm_device *dev, void *data,
 	return copy_result;
 }
 
+/** rockchip_ebc_apply_rect_hints() - Apply pixel hints from userspace
+ * @ebc: Driver data
+ * @num_rects: Number of rectangle in the rect_hints array.
+ * @rect_hints: Array of rectangle with associated pixel hints.
+ *
+ * Context: This function should only be called from userspace, as it calls copy_from_user()
+ *          a bunch of time. Additionally, kmalloc_array is call once to allocate a buffer.
+ *          It can sleep during initial allocation, and data copy from userland.
+ *          The function locks ebc->hints_ioctl_lock after copying a batch of rect_hints, and
+ *          releases it before the next copy.
+ */
+static int rockchip_ebc_apply_rect_hints(
+		struct rockchip_ebc *ebc, u32 num_rects,
+		struct drm_rockchip_ebc_rect_hint __user *rect_hints)
+{
+	int ret = 0;
+
+	if (!access_ok(rect_hints, num_rects * sizeof(*rect_hints))) {
+		return -EFAULT;
+	}
+
+	struct drm_rockchip_ebc_rect_hint *rect_hint_arr = kmalloc_array(min(rect_hint_batch, num_rects), sizeof(*rect_hints), GFP_KERNEL);
+	if (!rect_hint_arr) {
+		return -EFAULT;
+	}
+
+	size_t processed = 0;
+	while (num_rects > 0 && ret == 0) {
+		size_t to_process = min(rect_hint_batch, num_rects);
+		size_t copy_size = to_process * sizeof(*rect_hints);
+		size_t remain = copy_from_user(rect_hint_arr, rect_hints + processed, copy_size);
+
+		// I'm not even sure this can really happen, but for now this will do.
+		if (remain > 0) {
+			// Alternatively, we could do an early return here.
+			to_process = (copy_size - remain) % sizeof(*rect_hints);
+			ret = -EFAULT;
+		}
+
+		spin_lock(&ebc->hints_ioctl_lock);
+		ebc->hints_changed = 2;
+		// TODO: neon blit
+		for (int i = 0; i < to_process; ++i) {
+			struct drm_rect *r = (struct drm_rect *)&(rect_hint_arr[i].rect);
+			u8 hint = rect_hint_arr[i].hints & ROCKCHIP_EBC_HINT_MASK;
+
+			for (unsigned int y = max(0, r->y1);
+			     y < min(ebc->pixel_pitch, (u32)r->y2); ++y) {
+				unsigned int x1 = max(0, r->x1);
+				unsigned int x2 = min(ebc->pixel_pitch, (u32)r->x2);
+				unsigned int width = min(ebc->pixel_pitch, x2 - x1);
+				if (x1 < ebc->pixel_pitch)
+					memset(ebc->hints_ioctl + y * ebc->pixel_pitch + x1, hint, width);
+			}
+		}
+		spin_unlock(&ebc->hints_ioctl_lock);
+
+		num_rects -= to_process;
+		processed += to_process;
+	}
+
+	kfree(rect_hint_arr);
+	return ret;
+}
+
 static int ioctl_rect_hints(struct drm_device *dev, void *data,
 		struct drm_file *file_priv)
 {
@@ -391,24 +461,15 @@ static int ioctl_rect_hints(struct drm_device *dev, void *data,
 	// Alternatively, use separate buffer and only lock when copying final buffer
 	spin_lock(&ebc->hints_ioctl_lock);
 	ebc->hints_changed = 2;
-	if (rect_hints->set_default_hint)
-		memset(ebc->hints_ioctl, default_hint & ROCKCHIP_EBC_HINT_MASK, ebc->num_pixels);
-	// TODO: verify parameter num_rects, e.g. copy_struct_from_user(data, sizeof(struct TODO), _IOC_SIZE(cmd));
-	// TODO: neon blit
-	for (int i = 0; i < min(20, rect_hints->num_rects); ++i) {
-		struct drm_rockchip_ebc_rect_hint *rect_hint = rect_hints->rect_hints + i;
-		struct drm_rect *r = &rect_hint->rect;
-		u8 hint = rect_hint->hints & ROCKCHIP_EBC_HINT_MASK;
-		for (unsigned int y = max(0, r->y1);
-		     y < min(ebc->pixel_pitch, (u32)r->y2); ++y) {
-			unsigned int x1 = max(0, r->x1);
-			unsigned int x2 = min(ebc->pixel_pitch, (u32)r->x2);
-			unsigned int width = min(ebc->pixel_pitch, x2 - x1);
-			if (x1 < ebc->pixel_pitch)
-				memset(ebc->hints_ioctl + y * ebc->pixel_pitch + x1, hint, width);
-		}
+	if (rect_hints->set_default_hint) {
+		int hint = rect_hints->default_hint & ROCKCHIP_EBC_HINT_MASK;
+		memset(ebc->hints_ioctl, hint, ebc->num_pixels);
+		default_hint = hint;
 	}
 	spin_unlock(&ebc->hints_ioctl_lock);
+
+	if (rect_hints->num_rects)
+		return rockchip_ebc_apply_rect_hints(ebc, rect_hints->num_rects, u64_to_user_ptr(rect_hints->rect_hints));
 
 	return 0;
 }
