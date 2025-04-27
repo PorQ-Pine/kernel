@@ -1873,7 +1873,7 @@ static int rockchip_ebc_probe(struct platform_device *pdev)
 	ebc->gray4_size = width * height / 2;
 	ebc->phase_pitch = ebc->direct_mode ? width / 4 : width;
 	ebc->phase_size = ebc->phase_pitch * height;
-	ebc->num_pixels = width * width;
+	ebc->num_pixels = width * height;
 	ebc->pixel_pitch = width;
 	ebc->screen_rect = DRM_RECT_INIT(0, 0, width, height);
 
