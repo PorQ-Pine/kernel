@@ -427,7 +427,6 @@ static int rockchip_ebc_apply_rect_hints(
 		}
 
 		spin_lock(&ebc->hints_ioctl_lock);
-		ebc->hints_changed = 2;
 		// TODO: neon blit
 		for (int i = 0; i < to_process; ++i) {
 			struct drm_rect *r = (struct drm_rect *)&(rect_hint_arr[i].rect);
@@ -460,7 +459,6 @@ static int ioctl_rect_hints(struct drm_device *dev, void *data,
 
 	// Alternatively, use separate buffer and only lock when copying final buffer
 	spin_lock(&ebc->hints_ioctl_lock);
-	ebc->hints_changed = 2;
 	if (rect_hints->set_default_hint) {
 		int hint = rect_hints->default_hint & ROCKCHIP_EBC_HINT_MASK;
 		memset(ebc->hints_ioctl, hint, ebc->num_pixels);
