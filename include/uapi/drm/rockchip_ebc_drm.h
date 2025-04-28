@@ -23,17 +23,29 @@ struct drm_rockchip_ebc_trigger_global_refresh {
 
 struct drm_rockchip_ebc_off_screen {
 	__u64 info1;
-	char * ptr_screen_content;
+	char *ptr_screen_content;
 };
 
+/**
+ * struct drm_rockchip_ebc_extract_fbs - Pointers to userspace buffers. Pointers
+   that are NULL are skipped without warning.
+ * @ptr_packed_inner_outer_nextprev: pointer to 3 * width * height buffer
+ *   containing packed tuples of inner counters, outer counters, and a
+ *   packed Y4 (next, prev) pairs.
+ * @ptr_hints: pointer to width * height buffer for hints.
+ * @ptr_prelim_target: pointer to width * height buffer containing packed Y4
+     (prelim, target) pairs.
+ * @ptr_phase1: pointer to width * height / 4 buffer containing the first of
+     the double-buffered phase buffers.
+ * @ptr_phase2: pointer to width * height / 4 buffer containing the second of
+     the double-buffered phase buffers.
+ */
 struct drm_rockchip_ebc_extract_fbs {
-	char *ptr_next_prev;
+	char *ptr_packed_inner_outer_nextprev;
 	char *ptr_hints;
-	char * ptr_prelim_target;
-	char * ptr_phase1;
-	char * ptr_phase2;
-	char * ptr_fnum_inner;
-	char * ptr_fnum_outer;
+	char *ptr_prelim_target;
+	char *ptr_phase1;
+	char *ptr_phase2;
 };
 
 /**

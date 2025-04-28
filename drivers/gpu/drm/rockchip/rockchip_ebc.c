@@ -365,26 +365,58 @@ to_ebc_crtc_state(struct drm_crtc_state *crtc_state)
 {
 	return container_of(crtc_state, struct ebc_crtc_state, base);
 }
+
 static int ioctl_extract_fbs(struct drm_device *dev, void *data,
 		struct drm_file *file_priv)
 {
 	struct drm_rockchip_ebc_extract_fbs *args = data;
 	struct rockchip_ebc *ebc = dev_get_drvdata(dev->dev);
 	struct rockchip_ebc_ctx *ctx = to_ebc_crtc_state(READ_ONCE(ebc->crtc.state))->ctx;
-	int copy_result = 0;
+	int res = 0;
+	unsigned long num_pixels = ebc->num_pixels;
+	int refresh_index = ctx->refresh_index;
 
-	// todo: use access_ok here
-	access_ok(args->ptr_next_prev, ebc->num_pixels);
-	// TODO: fix inner/outer size and ioctl
-	copy_result |= copy_to_user(args->ptr_next_prev, ebc->packed_inner_outer_nextprev,
-				    ebc->num_pixels);
-	copy_result |= copy_to_user(args->ptr_hints, ctx->hints_buffer[ctx->refresh_index], ebc->num_pixels);
-	copy_result |= copy_to_user(args->ptr_prelim_target, ctx->prelim_target_buffer[ctx->refresh_index], ebc->num_pixels);
-
-	copy_result |= copy_to_user(args->ptr_phase1, ebc->phase[0], ebc->phase_size);
-	copy_result |= copy_to_user(args->ptr_phase2, ebc->phase[1], ebc->phase_size);
-
-	return copy_result;
+	if (args->ptr_packed_inner_outer_nextprev) {
+		if (access_ok(args->ptr_packed_inner_outer_nextprev, 3 * num_pixels))
+			res |= copy_to_user(
+				args->ptr_packed_inner_outer_nextprev,
+				ebc->packed_inner_outer_nextprev,
+				3 * num_pixels);
+		else
+			res |= -EFAULT;
+	}
+	if (args->ptr_hints) {
+		if (access_ok(args->ptr_hints, num_pixels))
+			res |= copy_to_user(args->ptr_hints,
+					    ctx->hints_buffer[refresh_index],
+					    num_pixels);
+		else
+			res |= -EFAULT;
+	}
+	if (args->ptr_prelim_target) {
+		if (access_ok(args->ptr_prelim_target, num_pixels))
+			res |= copy_to_user(
+				args->ptr_prelim_target,
+				ctx->prelim_target_buffer[refresh_index],
+				num_pixels);
+		else
+			res |= -EFAULT;
+	}
+	if (args->ptr_phase1) {
+		if (access_ok(args->ptr_phase1, num_pixels >> 2))
+			res |= copy_to_user(args->ptr_phase1, ebc->phase[0],
+					    ebc->phase_size);
+		else
+			res |= -EFAULT;
+	}
+	if (args->ptr_phase2) {
+		if (access_ok(args->ptr_phase2, num_pixels >> 2))
+			res |= copy_to_user(args->ptr_phase2, ebc->phase[1],
+					    ebc->phase_size);
+		else
+			res |= -EFAULT;
+	}
+	return res;
 }
 
 /** rockchip_ebc_apply_rect_hints() - Apply pixel hints from userspace
