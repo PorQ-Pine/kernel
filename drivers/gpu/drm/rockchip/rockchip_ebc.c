@@ -504,23 +504,40 @@ static int ioctl_rect_hints(struct drm_device *dev, void *data,
 	return 0;
 }
 
-static int ioctl_set_fast_mode(struct drm_device *dev, void *data,
+static int ioctl_mode(struct drm_device *dev, void *data,
 			       struct drm_file *file_priv)
 {
-	struct drm_rockchip_ebc_fast_mode *fast_mode = data;
+	struct drm_rockchip_ebc_mode *mode = data;
 	struct rockchip_ebc *ebc = dev_get_drvdata(dev->dev);
+	int ret = 0;
 
-	spin_lock(&ebc->work_item_lock);
-	if (fast_mode->fast_mode) {
-		ebc->work_item |= ROCKCHIP_EBC_WORK_ITEM_ENABLE_FAST_MODE;
-		ebc->work_item &= ~ROCKCHIP_EBC_WORK_ITEM_DISABLE_FAST_MODE;
+	if (mode->set_mode) {
+		spin_lock(&ebc->work_item_lock);
+		switch (mode->mode) {
+		case ROCKCHIP_EBC_MODE_NORMAL:
+			ebc->work_item |=
+				ROCKCHIP_EBC_WORK_ITEM_DISABLE_FAST_MODE;
+			ebc->work_item &=
+				~ROCKCHIP_EBC_WORK_ITEM_ENABLE_FAST_MODE;
+			break;
+		case ROCKCHIP_EBC_MODE_FAST:
+			ebc->work_item |=
+				ROCKCHIP_EBC_WORK_ITEM_ENABLE_FAST_MODE;
+			ebc->work_item &=
+				~ROCKCHIP_EBC_WORK_ITEM_DISABLE_FAST_MODE;
+			break;
+		default:
+			ret = -EINVAL;
+		}
+		spin_unlock(&ebc->work_item_lock);
 	} else {
-		ebc->work_item |= ROCKCHIP_EBC_WORK_ITEM_DISABLE_FAST_MODE;
-		ebc->work_item &= ~ROCKCHIP_EBC_WORK_ITEM_ENABLE_FAST_MODE;
+		if (ebc->fast_mode)
+			mode->mode = ROCKCHIP_EBC_MODE_FAST;
+		else
+			mode->mode = ROCKCHIP_EBC_MODE_NORMAL;
 	}
-	spin_unlock(&ebc->work_item_lock);
 
-	return 0;
+	return ret;
 }
 
 static const struct drm_ioctl_desc ioctls[DRM_COMMAND_END - DRM_COMMAND_BASE] = {
@@ -532,8 +549,7 @@ static const struct drm_ioctl_desc ioctls[DRM_COMMAND_END - DRM_COMMAND_BASE] = 
 			  DRM_RENDER_ALLOW),
 	DRM_IOCTL_DEF_DRV(ROCKCHIP_EBC_RECT_HINTS, ioctl_rect_hints,
 			  DRM_RENDER_ALLOW),
-	DRM_IOCTL_DEF_DRV(ROCKCHIP_EBC_FAST_MODE, ioctl_set_fast_mode,
-			  DRM_RENDER_ALLOW),
+	DRM_IOCTL_DEF_DRV(ROCKCHIP_EBC_MODE, ioctl_mode, DRM_RENDER_ALLOW),
 };
 
 static const struct drm_driver rockchip_ebc_drm_driver = {
