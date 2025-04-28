@@ -17,6 +17,9 @@ extern "C" {
 #define ROCKCHIP_EBC_HINT_REDRAW 1 << 7
 #define ROCKCHIP_EBC_HINT_MASK 0xf0
 
+#define ROCKCHIP_EBC_MODE_NORMAL	0
+#define ROCKCHIP_EBC_MODE_FAST		1
+
 struct drm_rockchip_ebc_trigger_global_refresh {
 	bool trigger_global_refresh;
 };
@@ -76,8 +79,16 @@ struct drm_rockchip_ebc_rect_hints {
 	__u64	rect_hints;
 };
 
-struct drm_rockchip_ebc_fast_mode {
-	u8					fast_mode;
+/**
+ * struct drm_rockchip_ebc_mode - Query and set driver mode.
+ * @set_mode: apply mode instead of reading it to the same field.
+ * @mode: one of ROCKCHIP_EBC_MODE_NORMAL or ROCKCHIP_EBC_MODE_FAST.
+ * @padding: 64bit alignment padding.
+ */
+struct drm_rockchip_ebc_mode {
+	__u8	set_mode;
+	__u8	mode;
+	__u8	padding[6];
 };
 
 #define DRM_ROCKCHIP_EBC_NUM_IOCTLS		0x05
@@ -86,7 +97,7 @@ struct drm_rockchip_ebc_fast_mode {
 #define DRM_IOCTL_ROCKCHIP_EBC_OFF_SCREEN	DRM_IOWR(DRM_COMMAND_BASE + 0x01, struct drm_rockchip_ebc_off_screen)
 #define DRM_IOCTL_ROCKCHIP_EBC_EXTRACT_FBS	DRM_IOWR(DRM_COMMAND_BASE + 0x02, struct drm_rockchip_ebc_extract_fbs)
 #define DRM_IOCTL_ROCKCHIP_EBC_RECT_HINTS	DRM_IOW(DRM_COMMAND_BASE + 0x03, struct drm_rockchip_ebc_rect_hints)
-#define DRM_IOCTL_ROCKCHIP_EBC_FAST_MODE	DRM_IOWR(DRM_COMMAND_BASE + 0x04, struct drm_rockchip_ebc_fast_mode)
+#define DRM_IOCTL_ROCKCHIP_EBC_MODE		DRM_IOWR(DRM_COMMAND_BASE + 0x04, struct drm_rockchip_ebc_mode)
 
 
 #endif /* __ROCKCHIP_EBC_DRM_H__*/
