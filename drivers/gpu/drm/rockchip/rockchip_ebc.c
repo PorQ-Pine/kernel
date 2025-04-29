@@ -465,7 +465,7 @@ static int rockchip_ebc_apply_rect_hints(
 			u8 hint = rect_hint_arr[i].hints & ROCKCHIP_EBC_HINT_MASK;
 
 			for (unsigned int y = max(0, r->y1);
-			     y < min(ebc->pixel_pitch, (u32)r->y2); ++y) {
+			     y < min(ebc->height, (u32)r->y2); ++y) {
 				unsigned int x1 = max(0, r->x1);
 				unsigned int x2 = min(ebc->pixel_pitch, (u32)r->x2);
 				unsigned int width = min(ebc->pixel_pitch, x2 - x1);
@@ -1982,6 +1982,7 @@ static int rockchip_ebc_probe(struct platform_device *pdev)
 	ebc->phase_size = ebc->phase_pitch * height;
 	ebc->num_pixels = width * height;
 	ebc->pixel_pitch = width;
+	ebc->height = height;
 	ebc->screen_rect = DRM_RECT_INIT(0, 0, width, height);
 
 	ebc->y4_threshold_y1 = bw_threshold;
