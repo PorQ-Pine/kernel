@@ -90,7 +90,6 @@ struct rockchip_ebc {
 	// final buffer to display before suspending
 	u8				*final_off_screen;
 	spinlock_t			hints_ioctl_lock;
-	u8				hints_changed;
 	// Used to keep next/prev in 3WIN mode at zero. Read by controller
 	u8				*zero;
 	u8				*hardware_wf;
@@ -111,6 +110,7 @@ struct rockchip_ebc {
 	u32				phase_size;
 	u32				num_pixels;
 	u32				pixel_pitch;
+	u32				height;
 	// Dithering / thresholding information
 	u8				y4_threshold_y1;
 	aligned_u64			lut_y2_y4[2];

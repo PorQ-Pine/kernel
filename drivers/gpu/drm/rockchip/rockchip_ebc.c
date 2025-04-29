@@ -20,6 +20,7 @@
 #include <linux/regmap.h>
 #include <linux/regulator/consumer.h>
 #include <linux/sched.h>
+#include <linux/slab.h>
 #include <linux/dma-mapping.h>
 #include <linux/uaccess.h>
 #include <linux/firmware.h>
@@ -311,6 +312,10 @@ static int hskew_override = 0;
 module_param(hskew_override, int, S_IRUGO|S_IWUSR);
 MODULE_PARM_DESC(hskew_override, "Override hskew value");
 
+static unsigned int rect_hint_batch = 20;
+module_param(rect_hint_batch, uint, S_IRUGO|S_IWUSR);
+MODULE_PARM_DESC(rect_hint_batch, "Batch size when reading rect_hints in ioctl");
+
 static int testing = 0;
 
 DEFINE_DRM_GEM_FOPS(rockchip_ebc_fops);
@@ -360,26 +365,122 @@ to_ebc_crtc_state(struct drm_crtc_state *crtc_state)
 {
 	return container_of(crtc_state, struct ebc_crtc_state, base);
 }
+
 static int ioctl_extract_fbs(struct drm_device *dev, void *data,
 		struct drm_file *file_priv)
 {
 	struct drm_rockchip_ebc_extract_fbs *args = data;
 	struct rockchip_ebc *ebc = dev_get_drvdata(dev->dev);
 	struct rockchip_ebc_ctx *ctx = to_ebc_crtc_state(READ_ONCE(ebc->crtc.state))->ctx;
-	int copy_result = 0;
+	int res = 0;
+	unsigned long num_pixels = ebc->num_pixels;
+	int refresh_index = ctx->refresh_index;
 
-	// todo: use access_ok here
-	access_ok(args->ptr_next_prev, ebc->num_pixels);
-	// TODO: fix inner/outer size and ioctl
-	copy_result |= copy_to_user(args->ptr_next_prev, ebc->packed_inner_outer_nextprev,
-				    ebc->num_pixels);
-	copy_result |= copy_to_user(args->ptr_hints, ctx->hints_buffer[ctx->refresh_index], ebc->num_pixels);
-	copy_result |= copy_to_user(args->ptr_prelim_target, ctx->prelim_target_buffer[ctx->refresh_index], ebc->num_pixels);
+	if (args->ptr_packed_inner_outer_nextprev) {
+		if (access_ok(args->ptr_packed_inner_outer_nextprev, 3 * num_pixels))
+			res |= copy_to_user(
+				args->ptr_packed_inner_outer_nextprev,
+				ebc->packed_inner_outer_nextprev,
+				3 * num_pixels);
+		else
+			res |= -EFAULT;
+	}
+	if (args->ptr_hints) {
+		if (access_ok(args->ptr_hints, num_pixels))
+			res |= copy_to_user(args->ptr_hints,
+					    ctx->hints_buffer[refresh_index],
+					    num_pixels);
+		else
+			res |= -EFAULT;
+	}
+	if (args->ptr_prelim_target) {
+		if (access_ok(args->ptr_prelim_target, num_pixels))
+			res |= copy_to_user(
+				args->ptr_prelim_target,
+				ctx->prelim_target_buffer[refresh_index],
+				num_pixels);
+		else
+			res |= -EFAULT;
+	}
+	if (args->ptr_phase1) {
+		if (access_ok(args->ptr_phase1, num_pixels >> 2))
+			res |= copy_to_user(args->ptr_phase1, ebc->phase[0],
+					    ebc->phase_size);
+		else
+			res |= -EFAULT;
+	}
+	if (args->ptr_phase2) {
+		if (access_ok(args->ptr_phase2, num_pixels >> 2))
+			res |= copy_to_user(args->ptr_phase2, ebc->phase[1],
+					    ebc->phase_size);
+		else
+			res |= -EFAULT;
+	}
+	return res;
+}
 
-	copy_result |= copy_to_user(args->ptr_phase1, ebc->phase[0], ebc->phase_size);
-	copy_result |= copy_to_user(args->ptr_phase2, ebc->phase[1], ebc->phase_size);
+/** rockchip_ebc_apply_rect_hints() - Apply pixel hints from userspace
+ * @ebc: Driver data
+ * @num_rects: Number of rectangle in the rect_hints array.
+ * @rect_hints: Array of rectangle with associated pixel hints.
+ *
+ * Context: This function should only be called from userspace, as it calls copy_from_user()
+ *          a bunch of time. Additionally, kmalloc_array is call once to allocate a buffer.
+ *          It can sleep during initial allocation, and data copy from userland.
+ *          The function locks ebc->hints_ioctl_lock after copying a batch of rect_hints, and
+ *          releases it before the next copy.
+ */
+static int rockchip_ebc_apply_rect_hints(
+		struct rockchip_ebc *ebc, u32 num_rects,
+		struct drm_rockchip_ebc_rect_hint __user *rect_hints)
+{
+	int ret = 0;
 
-	return copy_result;
+	if (!access_ok(rect_hints, num_rects * sizeof(*rect_hints))) {
+		return -EFAULT;
+	}
+
+	struct drm_rockchip_ebc_rect_hint *rect_hint_arr = kmalloc_array(min(rect_hint_batch, num_rects), sizeof(*rect_hints), GFP_KERNEL);
+	if (!rect_hint_arr) {
+		return -EFAULT;
+	}
+
+	size_t processed = 0;
+	while (num_rects > 0 && ret == 0) {
+		size_t to_process = min(rect_hint_batch, num_rects);
+		size_t copy_size = to_process * sizeof(*rect_hints);
+		size_t remain = copy_from_user(rect_hint_arr, rect_hints + processed, copy_size);
+
+		// I'm not even sure this can really happen, but for now this will do.
+		if (remain > 0) {
+			// Alternatively, we could do an early return here.
+			to_process = (copy_size - remain) % sizeof(*rect_hints);
+			ret = -EFAULT;
+		}
+
+		spin_lock(&ebc->hints_ioctl_lock);
+		// TODO: neon blit
+		for (int i = 0; i < to_process; ++i) {
+			struct drm_rect *r = (struct drm_rect *)&(rect_hint_arr[i].rect);
+			u8 hint = rect_hint_arr[i].hints & ROCKCHIP_EBC_HINT_MASK;
+
+			for (unsigned int y = max(0, r->y1);
+			     y < min(ebc->height, (u32)r->y2); ++y) {
+				unsigned int x1 = max(0, r->x1);
+				unsigned int x2 = min(ebc->pixel_pitch, (u32)r->x2);
+				unsigned int width = min(ebc->pixel_pitch, x2 - x1);
+				if (x1 < ebc->pixel_pitch)
+					memset(ebc->hints_ioctl + y * ebc->pixel_pitch + x1, hint, width);
+			}
+		}
+		spin_unlock(&ebc->hints_ioctl_lock);
+
+		num_rects -= to_process;
+		processed += to_process;
+	}
+
+	kfree(rect_hint_arr);
+	return ret;
 }
 
 static int ioctl_rect_hints(struct drm_device *dev, void *data,
@@ -389,47 +490,54 @@ static int ioctl_rect_hints(struct drm_device *dev, void *data,
 	struct rockchip_ebc *ebc = dev_get_drvdata(dev->dev);
 
 	// Alternatively, use separate buffer and only lock when copying final buffer
-	spin_lock(&ebc->hints_ioctl_lock);
-	ebc->hints_changed = 2;
-	if (rect_hints->set_default_hint)
-		memset(ebc->hints_ioctl, default_hint & ROCKCHIP_EBC_HINT_MASK, ebc->num_pixels);
-	// TODO: verify parameter num_rects, e.g. copy_struct_from_user(data, sizeof(struct TODO), _IOC_SIZE(cmd));
-	// TODO: neon blit
-	for (int i = 0; i < min(20, rect_hints->num_rects); ++i) {
-		struct drm_rockchip_ebc_rect_hint *rect_hint = rect_hints->rect_hints + i;
-		struct drm_rect *r = &rect_hint->rect;
-		u8 hint = rect_hint->hints & ROCKCHIP_EBC_HINT_MASK;
-		for (unsigned int y = max(0, r->y1);
-		     y < min(ebc->pixel_pitch, (u32)r->y2); ++y) {
-			unsigned int x1 = max(0, r->x1);
-			unsigned int x2 = min(ebc->pixel_pitch, (u32)r->x2);
-			unsigned int width = min(ebc->pixel_pitch, x2 - x1);
-			if (x1 < ebc->pixel_pitch)
-				memset(ebc->hints_ioctl + y * ebc->pixel_pitch + x1, hint, width);
-		}
+	if (rect_hints->set_default_hint) {
+		int hint = rect_hints->default_hint & ROCKCHIP_EBC_HINT_MASK;
+		spin_lock(&ebc->hints_ioctl_lock);
+		memset(ebc->hints_ioctl, hint, ebc->num_pixels);
+		spin_unlock(&ebc->hints_ioctl_lock);
+		default_hint = hint;
 	}
-	spin_unlock(&ebc->hints_ioctl_lock);
+
+	if (rect_hints->num_rects)
+		return rockchip_ebc_apply_rect_hints(ebc, rect_hints->num_rects, u64_to_user_ptr(rect_hints->rect_hints));
 
 	return 0;
 }
 
-static int ioctl_set_fast_mode(struct drm_device *dev, void *data,
+static int ioctl_mode(struct drm_device *dev, void *data,
 			       struct drm_file *file_priv)
 {
-	struct drm_rockchip_ebc_fast_mode *fast_mode = data;
+	struct drm_rockchip_ebc_mode *mode = data;
 	struct rockchip_ebc *ebc = dev_get_drvdata(dev->dev);
+	int ret = 0;
 
-	spin_lock(&ebc->work_item_lock);
-	if (fast_mode->fast_mode) {
-		ebc->work_item |= ROCKCHIP_EBC_WORK_ITEM_ENABLE_FAST_MODE;
-		ebc->work_item &= ~ROCKCHIP_EBC_WORK_ITEM_DISABLE_FAST_MODE;
+	if (mode->set_mode) {
+		spin_lock(&ebc->work_item_lock);
+		switch (mode->mode) {
+		case ROCKCHIP_EBC_MODE_NORMAL:
+			ebc->work_item |=
+				ROCKCHIP_EBC_WORK_ITEM_DISABLE_FAST_MODE;
+			ebc->work_item &=
+				~ROCKCHIP_EBC_WORK_ITEM_ENABLE_FAST_MODE;
+			break;
+		case ROCKCHIP_EBC_MODE_FAST:
+			ebc->work_item |=
+				ROCKCHIP_EBC_WORK_ITEM_ENABLE_FAST_MODE;
+			ebc->work_item &=
+				~ROCKCHIP_EBC_WORK_ITEM_DISABLE_FAST_MODE;
+			break;
+		default:
+			ret = -EINVAL;
+		}
+		spin_unlock(&ebc->work_item_lock);
 	} else {
-		ebc->work_item |= ROCKCHIP_EBC_WORK_ITEM_DISABLE_FAST_MODE;
-		ebc->work_item &= ~ROCKCHIP_EBC_WORK_ITEM_ENABLE_FAST_MODE;
+		if (ebc->fast_mode)
+			mode->mode = ROCKCHIP_EBC_MODE_FAST;
+		else
+			mode->mode = ROCKCHIP_EBC_MODE_NORMAL;
 	}
-	spin_unlock(&ebc->work_item_lock);
 
-	return 0;
+	return ret;
 }
 
 static const struct drm_ioctl_desc ioctls[DRM_COMMAND_END - DRM_COMMAND_BASE] = {
@@ -441,8 +549,7 @@ static const struct drm_ioctl_desc ioctls[DRM_COMMAND_END - DRM_COMMAND_BASE] = 
 			  DRM_RENDER_ALLOW),
 	DRM_IOCTL_DEF_DRV(ROCKCHIP_EBC_RECT_HINTS, ioctl_rect_hints,
 			  DRM_RENDER_ALLOW),
-	DRM_IOCTL_DEF_DRV(ROCKCHIP_EBC_FAST_MODE, ioctl_set_fast_mode,
-			  DRM_RENDER_ALLOW),
+	DRM_IOCTL_DEF_DRV(ROCKCHIP_EBC_MODE, ioctl_mode, DRM_RENDER_ALLOW),
 };
 
 static const struct drm_driver rockchip_ebc_drm_driver = {
@@ -1873,8 +1980,9 @@ static int rockchip_ebc_probe(struct platform_device *pdev)
 	ebc->gray4_size = width * height / 2;
 	ebc->phase_pitch = ebc->direct_mode ? width / 4 : width;
 	ebc->phase_size = ebc->phase_pitch * height;
-	ebc->num_pixels = width * width;
+	ebc->num_pixels = width * height;
 	ebc->pixel_pitch = width;
+	ebc->height = height;
 	ebc->screen_rect = DRM_RECT_INIT(0, 0, width, height);
 
 	ebc->y4_threshold_y1 = bw_threshold;
