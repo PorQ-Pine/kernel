@@ -490,13 +490,13 @@ static int ioctl_rect_hints(struct drm_device *dev, void *data,
 	struct rockchip_ebc *ebc = dev_get_drvdata(dev->dev);
 
 	// Alternatively, use separate buffer and only lock when copying final buffer
-	spin_lock(&ebc->hints_ioctl_lock);
 	if (rect_hints->set_default_hint) {
 		int hint = rect_hints->default_hint & ROCKCHIP_EBC_HINT_MASK;
+		spin_lock(&ebc->hints_ioctl_lock);
 		memset(ebc->hints_ioctl, hint, ebc->num_pixels);
+		spin_unlock(&ebc->hints_ioctl_lock);
 		default_hint = hint;
 	}
-	spin_unlock(&ebc->hints_ioctl_lock);
 
 	if (rect_hints->num_rects)
 		return rockchip_ebc_apply_rect_hints(ebc, rect_hints->num_rects, u64_to_user_ptr(rect_hints->rect_hints));
