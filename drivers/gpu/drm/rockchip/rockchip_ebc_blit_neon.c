@@ -837,7 +837,7 @@ void rockchip_ebc_blit_fb_rgb565_y4_hints_neon(const struct rockchip_ebc *ebc,
 			uint16x8_t q16_gray;
 
 			// RGB -> Y8 using rounded YUV
-			// Load 16 RGB values
+			// Load 8 RGB values
 			uint16x8_t q16_rgb = vld1q_u16(fb_line);
 
 			q16_gray = vmull_u8(q8_yuv_b,
@@ -867,10 +867,11 @@ void rockchip_ebc_blit_fb_rgb565_y4_hints_neon(const struct rockchip_ebc *ebc,
 
 			// Combine into single vector, discard lower bits
 			// 0A 0B 0C 0D
-			q8_gray = vshrq_n_u8(vcombine_u8(q8s_gray2, q8s_gray1),
+			q8_gray = vshrq_n_u8(vrev64q_u8(vcombine_u8(q8s_gray2, q8s_gray1)),
 					     4);
 
-			uint8x16_t q8_hint = vld1q_u8(ioctl_hints_line);
+			uint64x1x2_t q64sx2_hint = vld2_u64((u64 *) ioctl_hints_line);
+			uint8x16_t q8_hint = vrev64q_u8(vreinterpretq_u8_u64(vcombine_u64(q64sx2_hint.val[1], q64sx2_hint.val[0])));
 			/* __builtin_prefetch(ioctl_hints_line + pixel_pitch, 0, 0); */
 			uint8x16_t q8_hint_dither = vtstq_u8(q8_hint, q8_0x40);
 			uint8x16_t q8_hint_waveform =
@@ -907,11 +908,9 @@ void rockchip_ebc_blit_fb_rgb565_y4_hints_neon(const struct rockchip_ebc *ebc,
 			uint8x16_t q8_prelim_target = vorrq_u8(
 				vshlq_n_u8(q8_gray_y1_dt, 4), q8_target);
 
-			q8_prelim_target = vrev64q_u8(q8_prelim_target);
-			q8_hint_gray = vrev64q_u8(q8_hint_gray);
 			__builtin_prefetch(prelim_target_line + prefetch_pitch, 1, 0); // Maybe 1, 1 to keep in L3 cache
 			__builtin_prefetch(hints_line + prefetch_pitch, 1, 0);
-			vst1q_u8(hints_line, vcombine_u8(vget_high_u8(q8_hint_gray), vget_low_u8(q8_hint_gray)));
+			vst1q_u8(hints_line, q8_hint_gray);
 			vst1q_u8(prelim_target_line, q8_prelim_target);
 
 			// Swap to support 32x32 dithering textures
@@ -1031,10 +1030,11 @@ void rockchip_ebc_blit_fb_xrgb8888_y4_hints_neon(
 
 			// Combine into single vector, discard lower bits
 			// 0A 0B 0C 0D
-			q8_gray = vshrq_n_u8(vcombine_u8(q8s_gray1, q8s_gray2),
+			q8_gray = vshrq_n_u8(vrev64q_u8(vcombine_u8(q8s_gray1, q8s_gray2)),
 					     4);
 
-			uint8x16_t q8_hint = vld1q_u8(ioctl_hints_line);
+			uint64x1x2_t q64sx2_hint = vld2_u64((u64 *) ioctl_hints_line);
+			uint8x16_t q8_hint = vrev64q_u8(vreinterpretq_u8_u64(vcombine_u64(q64sx2_hint.val[1], q64sx2_hint.val[0])));
 			/* __builtin_prefetch(ioctl_hints_line + pixel_pitch, 0, 0); */
 			uint8x16_t q8_hint_dither = vtstq_u8(q8_hint, q8_0x40);
 			uint8x16_t q8_hint_waveform =
@@ -1071,11 +1071,9 @@ void rockchip_ebc_blit_fb_xrgb8888_y4_hints_neon(
 			uint8x16_t q8_prelim_target = vorrq_u8(
 				vshlq_n_u8(q8_gray_y1_dt, 4), q8_target);
 
-			q8_prelim_target = vrev64q_u8(q8_prelim_target);
-			q8_hint_gray = vrev64q_u8(q8_hint_gray);
 			__builtin_prefetch(prelim_target_line + prefetch_pitch, 1, 0); // Maybe 1, 1 to keep in L3 cache
 			__builtin_prefetch(hints_line + prefetch_pitch, 1, 0);
-			vst1q_u8(hints_line, vcombine_u8(vget_high_u8(q8_hint_gray), vget_low_u8(q8_hint_gray)));
+			vst1q_u8(hints_line, q8_hint_gray);
 			vst1q_u8(prelim_target_line, q8_prelim_target);
 
 			// Swap to support 32x32 dithering textures
@@ -1169,14 +1167,15 @@ void rockchip_ebc_blit_fb_r8_y4_hints_neon(const struct rockchip_ebc *ebc,
 		    prelim_target_line -= 16, ioctl_hints_line += 16,
 		    hints_line -= 16) {
 			// Load 16 RGB values
-			uint8x16_t q8_gray = vld1q_u8(fb_line);
+			uint64x1x2_t q64sx2_gray = vld2_u64((u64 *) fb_line);
 			/* __builtin_prefetch(fb_line + pixel_pitch, 0, 0); */
 
 			// Discard lower bits
 			// 0A 0B 0C 0D
-			q8_gray = vshrq_n_u8(q8_gray, 4);
+			uint8x16_t q8_gray = vshrq_n_u8(vrev64q_u8(vreinterpretq_u8_u64(vcombine_u64(q64sx2_gray.val[1], q64sx2_gray.val[0]))), 4);
 
-			uint8x16_t q8_hint = vld1q_u8(ioctl_hints_line);
+			uint64x1x2_t q64sx2_hint = vld2_u64((u64 *) ioctl_hints_line);
+			uint8x16_t q8_hint = vrev64q_u8(vreinterpretq_u8_u64(vcombine_u64(q64sx2_hint.val[1], q64sx2_hint.val[0])));
 			/* __builtin_prefetch(ioctl_hints_line + pixel_pitch, 0, 0); */
 			uint8x16_t q8_hint_dither = vtstq_u8(q8_hint, q8_0x40);
 			uint8x16_t q8_hint_waveform =
@@ -1213,13 +1212,10 @@ void rockchip_ebc_blit_fb_r8_y4_hints_neon(const struct rockchip_ebc *ebc,
 			uint8x16_t q8_prelim_target = vorrq_u8(
 				vshlq_n_u8(q8_gray_y1_dt, 4), q8_target);
 
-			q8_prelim_target = vrev64q_u8(q8_prelim_target);
-			q8_hint_gray = vrev64q_u8(q8_hint_gray);
 			__builtin_prefetch(prelim_target_line + prefetch_pitch, 1, 0); // Maybe 1, 1 to keep in L3 cache
 			__builtin_prefetch(hints_line + prefetch_pitch, 1, 0);
-			vst1q_u8(hints_line, vcombine_u8(vget_high_u8(q8_hint_gray), vget_low_u8(q8_hint_gray)));
-			vst1q_u8(prelim_target_line,
-				  vcombine_u8(vget_high_u8(q8_prelim_target), vget_low_u8(q8_prelim_target)));
+			vst1q_u8(hints_line, q8_hint_gray);
+			vst1q_u8(prelim_target_line, q8_prelim_target);
 
 			// Swap to support 32x32 dithering textures
 			q8_tmp = q8_dither_pattern0;
