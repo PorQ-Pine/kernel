@@ -1517,6 +1517,9 @@ static void rockchip_ebc_plane_atomic_update(struct drm_plane *plane,
 		max(0, min(src_clip.x1 & ~15, (int)ebc->pixel_pitch - 16));
 	src_clip.x2 = min((src_clip.x2 + 15) & ~15, (int)ebc->pixel_pitch);
 
+	src_clip.y1 = max(0, src_clip.y1);
+	src_clip.y2 = min((int) ebc->height, src_clip.y2);
+
 	// This is the buffer we are allowed to modify, as it's not being read by the refresh thread
 	int idx_update = ctx->update_index;
 
