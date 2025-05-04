@@ -338,21 +338,22 @@ static int ioctl_trigger_global_refresh(struct drm_device *dev, void *data,
 }
 
 static int ioctl_set_off_screen(struct drm_device *dev, void *data,
-		struct drm_file *file_priv)
+				struct drm_file *file_priv)
 {
 	struct drm_rockchip_ebc_off_screen *args = data;
 	struct rockchip_ebc *ebc = dev_get_drvdata(dev->dev);
-	int copy_result;
-	pr_info("rockchip-ebc: ioctl_set_off_screen");
+	int res = 0;
+	void __user *ptr_off_screen = u64_to_user_ptr(args->ptr_screen_content);
 
-	// TODO: blit
-	copy_result = copy_from_user(&ebc->final_off_screen, args->ptr_screen_content, 1313144);
-	copy_result = copy_from_user(&ebc->final_off_screen + 1313144, args->ptr_screen_content, 1313144);
-	if (copy_result != 0){
-		pr_err("Could not copy off screen content from user-supplied data pointer (bytes not copied: %d)", copy_result);
-	}
-
-	return 0;
+	if (access_ok(ptr_off_screen, ebc->num_pixels)) {
+		res = copy_from_user(ebc->final_off_screen,
+				     ptr_off_screen, ebc->num_pixels);
+		if (res)
+			pr_err("Could not copy off screen content from user-supplied data pointer (bytes not copied: %d)",
+			       res);
+	} else
+		res = -EFAULT;
+	return res;
 }
 
 struct ebc_crtc_state {
