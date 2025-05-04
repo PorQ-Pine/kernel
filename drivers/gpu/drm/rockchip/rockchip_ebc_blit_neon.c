@@ -1231,4 +1231,6 @@ void rockchip_ebc_blit_fb_r8_y4_hints_neon(const struct rockchip_ebc *ebc,
 }
 EXPORT_SYMBOL(rockchip_ebc_blit_fb_r8_y4_hints_neon);
 
+MODULE_AUTHOR("hrdl <git@hrdl.eu>");
+MODULE_DESCRIPTION("Rockchip EBC NEON functions");
 MODULE_LICENSE("GPL v2");
