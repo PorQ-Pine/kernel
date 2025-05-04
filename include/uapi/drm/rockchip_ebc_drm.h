@@ -24,9 +24,16 @@ struct drm_rockchip_ebc_trigger_global_refresh {
 	bool trigger_global_refresh;
 };
 
+/**
+ * struct drm_rockchip_ebc_off_screen - Pointer to userspace buffer.
+ * @info1: unused.
+ * @ptr_screen_content: pointer to width * height * buffer containing
+ *   the horizontally flipped off screen. The highest four bits of each
+ *   byte are ignored.
+ */
 struct drm_rockchip_ebc_off_screen {
 	__u64 info1;
-	char *ptr_screen_content;
+	__u64 ptr_screen_content;
 };
 
 /**
@@ -94,7 +101,7 @@ struct drm_rockchip_ebc_mode {
 #define DRM_ROCKCHIP_EBC_NUM_IOCTLS		0x05
 
 #define DRM_IOCTL_ROCKCHIP_EBC_GLOBAL_REFRESH	DRM_IOWR(DRM_COMMAND_BASE + 0x00, struct drm_rockchip_ebc_trigger_global_refresh)
-#define DRM_IOCTL_ROCKCHIP_EBC_OFF_SCREEN	DRM_IOWR(DRM_COMMAND_BASE + 0x01, struct drm_rockchip_ebc_off_screen)
+#define DRM_IOCTL_ROCKCHIP_EBC_OFF_SCREEN	DRM_IOW(DRM_COMMAND_BASE + 0x01, struct drm_rockchip_ebc_off_screen)
 #define DRM_IOCTL_ROCKCHIP_EBC_EXTRACT_FBS	DRM_IOWR(DRM_COMMAND_BASE + 0x02, struct drm_rockchip_ebc_extract_fbs)
 #define DRM_IOCTL_ROCKCHIP_EBC_RECT_HINTS	DRM_IOW(DRM_COMMAND_BASE + 0x03, struct drm_rockchip_ebc_rect_hints)
 #define DRM_IOCTL_ROCKCHIP_EBC_MODE		DRM_IOWR(DRM_COMMAND_BASE + 0x04, struct drm_rockchip_ebc_mode)

@@ -67,8 +67,8 @@ void rockchip_ebc_schedule_advance_fast_neon(
 	uint16x4_t q16s_maxs = vdup_n_u16(0);
 	uint64x1_t q64s_0x00 = vdup_n_u64(0);
 
-	for (unsigned int y = clip_ongoing_or_waiting->y1;
-	     y < clip_ongoing_or_waiting->y2; ++y) {
+	for (unsigned int y = max(0, clip_ongoing_or_waiting->y1);
+	     y < min((int) ebc->height, clip_ongoing_or_waiting->y2); ++y) {
 		int offset = y * pixel_pitch + x_start;
 		u8 *packed_inner_outer_nextprev_line = ebc->packed_inner_outer_nextprev + offset * 3;
 		u8 *phases_line =
@@ -313,8 +313,8 @@ void rockchip_ebc_schedule_advance_neon(
 	uint16x4_t q16s_maxs = vdup_n_u16(0);
 	uint64x1_t q64s_0x00 = vdup_n_u64(0);
 
-	for (unsigned int y = clip_ongoing_or_waiting->y1;
-	     y < clip_ongoing_or_waiting->y2; ++y) {
+	for (unsigned int y = max(0, clip_ongoing_or_waiting->y1);
+	     y < min((int) ebc->height, clip_ongoing_or_waiting->y2); ++y) {
 		int offset = y * pixel_pitch + x_start;
 		u8 *packed_inner_outer_nextprev_line = ebc->packed_inner_outer_nextprev + offset * 3;
 		u8 *phases_line = phase_buffer + y * phase_pitch +
@@ -1231,4 +1231,6 @@ void rockchip_ebc_blit_fb_r8_y4_hints_neon(const struct rockchip_ebc *ebc,
 }
 EXPORT_SYMBOL(rockchip_ebc_blit_fb_r8_y4_hints_neon);
 
+MODULE_AUTHOR("hrdl <git@hrdl.eu>");
+MODULE_DESCRIPTION("Rockchip EBC NEON functions");
 MODULE_LICENSE("GPL v2");
