@@ -1810,7 +1810,7 @@ static int rockchip_ebc_waveform_init(struct rockchip_ebc *ebc)
 	const struct firmware * default_off_screen;
 	const struct firmware *custom_wf;
 
-	ret = drmm_epd_lut_file_init(drm, &ebc->lut_file, "rockchip/ebc.wbf");
+	ret = drmm_epd_lut_file_init(drm, &ebc->lut_file, EBC_FIRMWARE);
 	if (ret)
 		return ret;
 
@@ -1820,7 +1820,6 @@ static int rockchip_ebc_waveform_init(struct rockchip_ebc *ebc)
 		return ret;
 
 	if (!request_firmware(&custom_wf, EBC_CUSTOM_WF, drm->dev)) {
-		pr_debug("%s:%d\n", __func__, __LINE__);
 		size_t temp_range_size = 8 + ROCKCHIP_EBC_CUSTOM_WF_NUM_SEQS + ROCKCHIP_EBC_CUSTOM_WF_LUT_SIZE;
 		if ((custom_wf->size - 12) % temp_range_size) {
 			drm_err(drm, "Length error when loading custom_wf.bin\n");
@@ -1829,7 +1828,6 @@ static int rockchip_ebc_waveform_init(struct rockchip_ebc *ebc)
 			drm_err(drm, "Versioned magic comparison failed. Got %8ph, expected %8ph\n", custom_wf->data, custom_wf_magic_version);
 			ret = -EINVAL;
 		} else {
-			pr_debug("%s:%d\n", __func__, __LINE__);
 			unsigned int num_temp_ranges = (custom_wf->size - 12) / temp_range_size;
 			ebc->lut_custom.num_temp_ranges = num_temp_ranges;
 			ebc->lut_custom.luts = vzalloc(num_temp_ranges * sizeof(struct drm_epd_lut_temp_v2));
@@ -1837,7 +1835,6 @@ static int rockchip_ebc_waveform_init(struct rockchip_ebc *ebc)
 				drm_err(drm, "Failed to allocate lut_custom.luts\n");
 				ret = -ENOMEM;
 			} else {
-				pr_debug("%s:%d\n", __func__, __LINE__);
 				const u8 *fw_temp = custom_wf->data + 12;
 				for (int i = 0; i < num_temp_ranges; ++i) {
 					struct drm_epd_lut_temp_v2 *lut_temp = ebc->lut_custom.luts + i;
