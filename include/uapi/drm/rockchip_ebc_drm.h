@@ -17,8 +17,13 @@ extern "C" {
 #define ROCKCHIP_EBC_HINT_REDRAW 1 << 7
 #define ROCKCHIP_EBC_HINT_MASK 0xf0
 
-#define ROCKCHIP_EBC_MODE_NORMAL	0
-#define ROCKCHIP_EBC_MODE_FAST		1
+#define ROCKCHIP_EBC_DRIVER_MODE_NORMAL			0
+#define ROCKCHIP_EBC_DRIVER_MODE_FAST			1
+#define ROCKCHIP_EBC_DRIVER_MODE_ZERO_WAVEFORM		8
+
+#define ROCKCHIP_EBC_DITHER_MODE_BAYER		0
+#define ROCKCHIP_EBC_DITHER_MODE_BLUE_NOISE_16	1
+#define ROCKCHIP_EBC_DITHER_MODE_BLUE_NOISE_32	2
 
 struct drm_rockchip_ebc_trigger_global_refresh {
 	bool trigger_global_refresh;
@@ -87,24 +92,55 @@ struct drm_rockchip_ebc_rect_hints {
 };
 
 /**
- * struct drm_rockchip_ebc_mode - Query and set driver mode.
- * @set_mode: apply mode instead of reading it to the same field.
- * @mode: one of ROCKCHIP_EBC_MODE_NORMAL or ROCKCHIP_EBC_MODE_FAST.
- * @padding: 64bit alignment padding.
+ * struct drm_rockchip_ebc_mode - Query and set driver/dither  modes and
+ *   redraw delay
+ * @set_driver_mode: apply driver_mode instead of reading it to the same
+ *   field.
+ * @driver_mode: one of ROCKCHIP_EBC_DRIVER_MODE_NORMAL or
+ *   ROCKCHIP_EBC_DRIVER_MODE_FAST.
+ * @set_dither_mode: apply dither_mode instead of reading it to the same
+ *   field.
+ * @dither_mode: one of ROCKCHIP_EBC_DITHER_MODE_BAYER,
+ *   ROCKCHIP_EBC_DITHER_MODE_BLUE_NOISE_16, or
+ *   ROCKCHIP_EBC_DITHER_MODE_BLUE_NOISE_32.
+ * @redraw_delay: number of hardware frames to delay redraws.
+ * @set_redraw_delay: apply redraw_delay instead of reading it to the same
+ *  field.
  */
 struct drm_rockchip_ebc_mode {
-	__u8	set_mode;
-	__u8	mode;
-	__u8	padding[6];
+	__u8	set_driver_mode;
+	__u8	driver_mode;
+	__u8	set_dither_mode;
+	__u8	dither_mode;
+	__u16	redraw_delay;
+	__u8	set_redraw_delay;
+	__u8	_pad;
 };
 
-#define DRM_ROCKCHIP_EBC_NUM_IOCTLS		0x05
+/**
+ * struct drm_rockchip_ebc_zero_waveform- Query and enable/disable zero
+ *   waveform mode
+ * @set_zero_waveform_mode: apply zero_waveform_mode instead of reading it to
+ *   the same field.
+ * @zero_waveform_mode: 0 for disable(d), 1 for enable(d)
+ */
+struct drm_rockchip_ebc_zero_waveform {
+	__u8	set_zero_waveform_mode;
+	__u8	zero_waveform_mode;
+	__u8	_pad[6];
+};
+
+#define DRM_ROCKCHIP_EBC_NUM_IOCTLS		0x06
 
 #define DRM_IOCTL_ROCKCHIP_EBC_GLOBAL_REFRESH	DRM_IOWR(DRM_COMMAND_BASE + 0x00, struct drm_rockchip_ebc_trigger_global_refresh)
 #define DRM_IOCTL_ROCKCHIP_EBC_OFF_SCREEN	DRM_IOW(DRM_COMMAND_BASE + 0x01, struct drm_rockchip_ebc_off_screen)
 #define DRM_IOCTL_ROCKCHIP_EBC_EXTRACT_FBS	DRM_IOWR(DRM_COMMAND_BASE + 0x02, struct drm_rockchip_ebc_extract_fbs)
 #define DRM_IOCTL_ROCKCHIP_EBC_RECT_HINTS	DRM_IOW(DRM_COMMAND_BASE + 0x03, struct drm_rockchip_ebc_rect_hints)
 #define DRM_IOCTL_ROCKCHIP_EBC_MODE		DRM_IOWR(DRM_COMMAND_BASE + 0x04, struct drm_rockchip_ebc_mode)
+#define DRM_IOCTL_ROCKCHIP_EBC_ZERO_WAVEFORM	DRM_IOWR(DRM_COMMAND_BASE + 0x05, struct drm_rockchip_ebc_zero_waveform)
 
+#if defined(__cplusplus)
+}
+#endif
 
 #endif /* __ROCKCHIP_EBC_DRM_H__*/

@@ -120,10 +120,11 @@ struct rockchip_ebc {
 	u8				dithering_texture_size_hint;
 	// whether we use direct mode or 3WIN mode. Only 3WIN mode is implemented right now
 	bool				direct_mode;
-	bool				fast_mode;
+	int				driver_mode;
+	int				redraw_delay;
 	// Used to change the driver LUT due to temperature update, trigger a global refresh, or buffer changes
 	spinlock_t			work_item_lock;
-	u8				work_item;
+	u32				work_item;
 	// used to detect when we are suspending so we can do different things to
 	// the ebc display depending on whether we are sleeping or suspending
 	int				suspend_was_requested;
