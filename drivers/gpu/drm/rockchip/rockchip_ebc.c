@@ -785,7 +785,7 @@ static void rockchip_ebc_partial_refresh(struct rockchip_ebc *ebc,
 		bool skip_advance = false;
 
 		time_start_advance = ktime_get();
-		// All currently scheduled pixels have finished and we have a work item
+		// All currently scheduled pixels are IDLE or WAITING have finished and we have a work item
 		if (drm_rect_width(&clip_ongoing) <= 0 && work_item) {
 			// Refresh work item
 			spin_lock(&ebc->work_item_lock);
@@ -840,6 +840,12 @@ static void rockchip_ebc_partial_refresh(struct rockchip_ebc *ebc,
 			if (work_item & ROCKCHIP_EBC_WORK_ITEM_CHANGE_LUT) {
 				rockchip_ebc_change_lut(ebc);
 				print_lut(ebc);
+				// Reset inner and outer to make sure
+				// pixels that were WAITING stay
+				// valid. For simplicity, set to IDLE.
+				kernel_neon_begin();
+				rockchip_ebc_reset_inner_outer_neon(ebc);
+				kernel_neon_end();
 			}
 			if (work_item & ROCKCHIP_EBC_WORK_ITEM_INIT) {
 				clip_ongoing_or_waiting = ebc->screen_rect;
@@ -912,23 +918,28 @@ static void rockchip_ebc_partial_refresh(struct rockchip_ebc *ebc,
 		pr_debug("%s ebc->driver_mode=%d enabling_mode=%d", __func__, ebc->driver_mode, enabling_mode);
 		if (drm_rect_width(&clip_ongoing_or_waiting) > 0 &&
 		    !skip_advance) {
+			u8 force_hint = 0;
+			// Disable redraws of redraw_delay <= 0
+			u8 force_hint_mask = ebc->redraw_delay > 0 ? 0 : ROCKCHIP_EBC_HINT_REDRAW;
 			if (ebc->driver_mode == ROCKCHIP_EBC_DRIVER_MODE_FAST) {
 				kernel_neon_begin();
 				rockchip_ebc_schedule_advance_fast_neon(
-					ebc, prelim_target, hints,
-					phase_buffer, &clip_ongoing,
-					&clip_ongoing_or_waiting,
-					early_cancellation_addition, 0, 0, 0,
-					!no_schedule_until_clip_empty && !work_item);
+					ebc, prelim_target, hints, phase_buffer,
+					&clip_ongoing, &clip_ongoing_or_waiting,
+					early_cancellation_addition, 0,
+					force_hint, force_hint_mask,
+					!no_schedule_until_clip_empty &&
+						!work_item);
 				kernel_neon_end();
 			} else if (ebc->driver_mode == ROCKCHIP_EBC_DRIVER_MODE_NORMAL) {
 				kernel_neon_begin();
 				rockchip_ebc_schedule_advance_neon(
-					ebc, prelim_target, hints,
-					phase_buffer, &clip_ongoing,
-					&clip_ongoing_or_waiting,
-					early_cancellation_addition, 0, 0, 0,
-					!no_schedule_until_clip_empty && !work_item);
+					ebc, prelim_target, hints, phase_buffer,
+					&clip_ongoing, &clip_ongoing_or_waiting,
+					early_cancellation_addition, 0,
+					force_hint, force_hint_mask,
+					!no_schedule_until_clip_empty &&
+						!work_item);
 				kernel_neon_end();
 			}
 		}
