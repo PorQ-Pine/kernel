@@ -1231,6 +1231,22 @@ void rockchip_ebc_blit_fb_r8_y4_hints_neon(const struct rockchip_ebc *ebc,
 }
 EXPORT_SYMBOL(rockchip_ebc_blit_fb_r8_y4_hints_neon);
 
+void rockchip_ebc_reset_inner_outer_neon(const struct rockchip_ebc *ebc)
+{
+	u8 *packed_inner_outer_nextprev_line = ebc->packed_inner_outer_nextprev;
+	uint8x16_t q8_0x00 = vdupq_n_u8(0x00);
+	for (int i = 0; i < ebc->num_pixels; i += 16) {
+		uint8x16x3_t q8_inner_outer_nextprev = vld3q_u8(packed_inner_outer_nextprev_line);
+		uint8x16x3_t q8_inner_outer_nextprev_new = {
+			{ q8_0x00, q8_0x00, q8_inner_outer_nextprev.val[2] }
+		};
+		vst3q_u8(packed_inner_outer_nextprev_line,
+			 q8_inner_outer_nextprev_new);
+		packed_inner_outer_nextprev_line += 48;
+	}
+}
+EXPORT_SYMBOL(rockchip_ebc_reset_inner_outer_neon);
+
 MODULE_AUTHOR("hrdl <git@hrdl.eu>");
 MODULE_DESCRIPTION("Rockchip EBC NEON functions");
 MODULE_LICENSE("GPL v2");

@@ -159,20 +159,22 @@
 
 #define EBC_FIRMWARE		"rockchip/ebc.wbf"
 MODULE_FIRMWARE(EBC_FIRMWARE);
-#define EBC_OFFCONTENT "rockchip/rockchip_ebc_default_screen.bin"
+#define EBC_OFFCONTENT "rockchip/rockchip_ebc_default_screen_x4y4.bin"
 MODULE_FIRMWARE(EBC_OFFCONTENT);
 #define EBC_CUSTOM_WF "rockchip/custom_wf.bin"
 MODULE_FIRMWARE(EBC_CUSTOM_WF);
 
 static const char *custom_wf_magic_version = "CLUT0002";
 
-#define ROCKCHIP_EBC_WORK_ITEM_CHANGE_LUT	1
-#define ROCKCHIP_EBC_WORK_ITEM_GLOBAL_REFRESH	2
-#define ROCKCHIP_EBC_WORK_ITEM_INIT		4
-#define ROCKCHIP_EBC_WORK_ITEM_SUSPEND		8
-#define ROCKCHIP_EBC_WORK_ITEM_RESCHEDULE 16
-#define ROCKCHIP_EBC_WORK_ITEM_ENABLE_FAST_MODE 32
-#define ROCKCHIP_EBC_WORK_ITEM_DISABLE_FAST_MODE 64
+#define ROCKCHIP_EBC_WORK_ITEM_CHANGE_LUT			BIT(0)
+#define ROCKCHIP_EBC_WORK_ITEM_GLOBAL_REFRESH			BIT(1)
+#define ROCKCHIP_EBC_WORK_ITEM_INIT				BIT(2)
+#define ROCKCHIP_EBC_WORK_ITEM_SUSPEND				BIT(3)
+#define ROCKCHIP_EBC_WORK_ITEM_RESCHEDULE			BIT(4)
+#define ROCKCHIP_EBC_WORK_ITEM_ENABLE_NORMAL_MODE		BIT(5)
+#define ROCKCHIP_EBC_WORK_ITEM_ENABLE_FAST_MODE			BIT(6)
+#define ROCKCHIP_EBC_WORK_ITEM_ENABLE_ZERO_WAVEFORM_MODE	BIT(7)
+#define ROCKCHIP_EBC_WORK_ITEM_DISABLE_ZERO_WAVEFORM_MODE	BIT(8)
 
 static const u8 dither_bayer_04[] = {
 	7, 8, 2, 10, 7, 8, 2, 10, 7, 8, 2, 10, 7, 8, 2, 10,
@@ -512,33 +514,88 @@ static int ioctl_mode(struct drm_device *dev, void *data,
 	struct rockchip_ebc *ebc = dev_get_drvdata(dev->dev);
 	int ret = 0;
 
-	if (mode->set_mode) {
+	if (mode->set_driver_mode) {
 		spin_lock(&ebc->work_item_lock);
-		switch (mode->mode) {
-		case ROCKCHIP_EBC_MODE_NORMAL:
+		switch (mode->driver_mode) {
+		case ROCKCHIP_EBC_DRIVER_MODE_NORMAL:
 			ebc->work_item |=
-				ROCKCHIP_EBC_WORK_ITEM_DISABLE_FAST_MODE;
-			ebc->work_item &=
-				~ROCKCHIP_EBC_WORK_ITEM_ENABLE_FAST_MODE;
+				ROCKCHIP_EBC_WORK_ITEM_ENABLE_NORMAL_MODE;
 			break;
-		case ROCKCHIP_EBC_MODE_FAST:
+		case ROCKCHIP_EBC_DRIVER_MODE_FAST:
 			ebc->work_item |=
 				ROCKCHIP_EBC_WORK_ITEM_ENABLE_FAST_MODE;
-			ebc->work_item &=
-				~ROCKCHIP_EBC_WORK_ITEM_DISABLE_FAST_MODE;
 			break;
 		default:
-			ret = -EINVAL;
+			ret |= -EINVAL;
 		}
 		spin_unlock(&ebc->work_item_lock);
 	} else {
-		if (ebc->fast_mode)
-			mode->mode = ROCKCHIP_EBC_MODE_FAST;
-		else
-			mode->mode = ROCKCHIP_EBC_MODE_NORMAL;
+		mode->driver_mode = ebc->driver_mode;
+	}
+	if (mode->set_dither_mode) {
+		switch (mode->dither_mode) {
+		case ROCKCHIP_EBC_DITHER_MODE_BAYER:
+			ebc->dithering_texture_size_hint = 4;
+			ebc->dithering_texture = dither_bayer_04;
+			break;
+		case ROCKCHIP_EBC_DITHER_MODE_BLUE_NOISE_16:
+			ebc->dithering_texture_size_hint = 4;
+			ebc->dithering_texture = dither_blue_noise_16;
+			ebc->dithering_texture_size_hint = 16;
+			break;
+		case ROCKCHIP_EBC_DITHER_MODE_BLUE_NOISE_32:
+			ebc->dithering_texture = dither_blue_noise_32;
+			ebc->dithering_texture_size_hint = 32;
+			break;
+		default:
+			ret |= -EINVAL;
+		}
+	} else {
+		if (ebc->dithering_texture == dither_bayer_04)
+			mode->dither_mode = ROCKCHIP_EBC_DITHER_MODE_BAYER;
+		else if (ebc->dithering_texture == dither_blue_noise_16)
+			mode->dither_mode =
+				ROCKCHIP_EBC_DITHER_MODE_BLUE_NOISE_16;
+		else if (ebc->dithering_texture == dither_blue_noise_32)
+			mode->dither_mode =
+				ROCKCHIP_EBC_DITHER_MODE_BLUE_NOISE_32;
+	}
+	if (mode->set_redraw_delay) {
+		if (mode->redraw_delay != redraw_delay) {
+			redraw_delay = mode->redraw_delay;
+			spin_lock(&ebc->work_item_lock);
+			ebc->work_item |= ROCKCHIP_EBC_WORK_ITEM_CHANGE_LUT;
+			spin_unlock(&ebc->work_item_lock);
+		}
+	} else {
+		mode->redraw_delay = ebc->redraw_delay;
 	}
 
 	return ret;
+}
+
+static int ioctl_zero_waveform(struct drm_device *dev, void *data,
+			       struct drm_file *file_priv)
+{
+	struct drm_rockchip_ebc_zero_waveform *zero_waveform = data;
+	struct rockchip_ebc *ebc = dev_get_drvdata(dev->dev);
+
+	if (zero_waveform->set_zero_waveform_mode) {
+		spin_lock(&ebc->work_item_lock);
+		if (zero_waveform->zero_waveform_mode)
+			ebc->work_item |=
+				ROCKCHIP_EBC_WORK_ITEM_ENABLE_ZERO_WAVEFORM_MODE;
+		else
+			ebc->work_item |=
+				ROCKCHIP_EBC_WORK_ITEM_DISABLE_ZERO_WAVEFORM_MODE;
+		spin_unlock(&ebc->work_item_lock);
+	} else {
+		zero_waveform->zero_waveform_mode =
+			ebc->driver_mode ==
+				ROCKCHIP_EBC_DRIVER_MODE_ZERO_WAVEFORM;
+	}
+
+	return 0;
 }
 
 static const struct drm_ioctl_desc ioctls[DRM_COMMAND_END - DRM_COMMAND_BASE] = {
@@ -551,6 +608,8 @@ static const struct drm_ioctl_desc ioctls[DRM_COMMAND_END - DRM_COMMAND_BASE] = 
 	DRM_IOCTL_DEF_DRV(ROCKCHIP_EBC_RECT_HINTS, ioctl_rect_hints,
 			  DRM_RENDER_ALLOW),
 	DRM_IOCTL_DEF_DRV(ROCKCHIP_EBC_MODE, ioctl_mode, DRM_RENDER_ALLOW),
+	DRM_IOCTL_DEF_DRV(ROCKCHIP_EBC_ZERO_WAVEFORM, ioctl_zero_waveform,
+			  DRM_RENDER_ALLOW),
 };
 
 static const struct drm_driver rockchip_ebc_drm_driver = {
@@ -648,6 +707,7 @@ static void rockchip_ebc_change_lut(struct rockchip_ebc *ebc)
 			}
 		}
 	}
+	ebc->redraw_delay = redraw_delay = redraw_delay - waiting_remaining;
 	// TODO: generalise for temperature ranges for which more than 31 phases are required
 	ebc->inner_0_15 = lut->lut[(0xf << ROCKCHIP_EBC_CUSTOM_WF_SEQ_SHIFT) +
 		lut->offsets[ROCKCHIP_EBC_CUSTOM_WF_DU]];
@@ -680,7 +740,7 @@ static void rockchip_ebc_partial_refresh(struct rockchip_ebc *ebc,
 	struct drm_rect clip_ongoing = DRM_RECT_EMPTY_EXTANDABLE;
 
 	struct drm_rect clip_ongoing_or_waiting = clip_ongoing;
-	u8 work_item = ebc->work_item;
+	u32 work_item = ebc->work_item;
 	ktime_t time_last_start = ktime_get();
 
 	// TODO: move into logic setting these values
@@ -709,7 +769,9 @@ static void rockchip_ebc_partial_refresh(struct rockchip_ebc *ebc,
 	bool awaiting_completion = false;
 	bool awaiting_start = false;
 	bool no_schedule_until_clip_empty = false;
-	bool is_enabling_fast_mode = false, is_disabling_fast_mode = false;
+	int enabling_mode = ebc->driver_mode;
+	int zero_waveform_mode_num_zero_phase_buffers = 0;
+	bool inhibit_suspend = false;
 	bool is_suspending = false;
 	ktime_t time_last_report = ktime_get();
 	int num_frames_since_last_report = 0;
@@ -723,28 +785,67 @@ static void rockchip_ebc_partial_refresh(struct rockchip_ebc *ebc,
 		bool skip_advance = false;
 
 		time_start_advance = ktime_get();
-		// All currently scheduled pixels have finished and we have a work item
+		// All currently scheduled pixels are IDLE or WAITING have finished and we have a work item
 		if (drm_rect_width(&clip_ongoing) <= 0 && work_item) {
 			// Refresh work item
 			spin_lock(&ebc->work_item_lock);
 			work_item |= ebc->work_item;
 			ebc->work_item = 0;
 			spin_unlock(&ebc->work_item_lock);
+			if (ebc->driver_mode ==
+				    ROCKCHIP_EBC_DRIVER_MODE_ZERO_WAVEFORM &&
+			    !(work_item &
+			      ROCKCHIP_EBC_WORK_ITEM_DISABLE_ZERO_WAVEFORM_MODE)) {
+				pr_err("Ignoring work items until zero waveform mode is left explicitly");
+				work_item = 0;
+			}
 			if ((work_item &
-			     ROCKCHIP_EBC_WORK_ITEM_ENABLE_FAST_MODE) &&
-			    !ebc->fast_mode) {
+				    ROCKCHIP_EBC_WORK_ITEM_DISABLE_ZERO_WAVEFORM_MODE) &&
+				   (ebc->driver_mode ==
+				    ROCKCHIP_EBC_DRIVER_MODE_ZERO_WAVEFORM)) {
+				pr_warn("Disabling zero waveform mode");
+				inhibit_suspend = false;
+				// Make sure to set a mode
+				if (!(work_item &
+				      (ROCKCHIP_EBC_WORK_ITEM_ENABLE_ZERO_WAVEFORM_MODE |
+				       ROCKCHIP_EBC_WORK_ITEM_ENABLE_FAST_MODE |
+				       ROCKCHIP_EBC_WORK_ITEM_ENABLE_NORMAL_MODE))) {
+					work_item |=
+						ROCKCHIP_EBC_WORK_ITEM_ENABLE_NORMAL_MODE;
+				}
+			}
+			if ((work_item &
+			     ROCKCHIP_EBC_WORK_ITEM_ENABLE_ZERO_WAVEFORM_MODE) &&
+			    (ebc->driver_mode !=
+			     ROCKCHIP_EBC_DRIVER_MODE_ZERO_WAVEFORM)) {
+				pr_info("Enabling zero waveform mode, finishing ongoing updates");
+				// Finish ongoing updates to resume with a zero-only inner/outer buffer
 				no_schedule_until_clip_empty = true;
-				is_enabling_fast_mode = true;
+				zero_waveform_mode_num_zero_phase_buffers = 0;
+				enabling_mode =
+					ROCKCHIP_EBC_DRIVER_MODE_ZERO_WAVEFORM;
+				inhibit_suspend = true;
+			} else if ((work_item &
+				    ROCKCHIP_EBC_WORK_ITEM_ENABLE_FAST_MODE) &&
+				   ebc->driver_mode != ROCKCHIP_EBC_DRIVER_MODE_FAST) {
+				no_schedule_until_clip_empty = true;
+				enabling_mode = ROCKCHIP_EBC_DRIVER_MODE_FAST;
 				work_item |= ROCKCHIP_EBC_WORK_ITEM_GLOBAL_REFRESH;
 			} else if ((work_item &
-				    ROCKCHIP_EBC_WORK_ITEM_DISABLE_FAST_MODE) &&
-				   ebc->fast_mode) {
+				    ROCKCHIP_EBC_WORK_ITEM_ENABLE_NORMAL_MODE) &&
+				   ebc->driver_mode != ROCKCHIP_EBC_DRIVER_MODE_NORMAL) {
 				no_schedule_until_clip_empty = true;
-				is_disabling_fast_mode = true;
+				enabling_mode = ROCKCHIP_EBC_DRIVER_MODE_NORMAL;
 			}
 			if (work_item & ROCKCHIP_EBC_WORK_ITEM_CHANGE_LUT) {
 				rockchip_ebc_change_lut(ebc);
 				print_lut(ebc);
+				// Reset inner and outer to make sure
+				// pixels that were WAITING stay
+				// valid. For simplicity, set to IDLE.
+				kernel_neon_begin();
+				rockchip_ebc_reset_inner_outer_neon(ebc);
+				kernel_neon_end();
 			}
 			if (work_item & ROCKCHIP_EBC_WORK_ITEM_INIT) {
 				clip_ongoing_or_waiting = ebc->screen_rect;
@@ -769,9 +870,14 @@ static void rockchip_ebc_partial_refresh(struct rockchip_ebc *ebc,
 				ebc->suspend_was_requested = 1;
 			} else if (work_item &
 				   ROCKCHIP_EBC_WORK_ITEM_GLOBAL_REFRESH) {
-				if (ebc->fast_mode || is_enabling_fast_mode) {
-					ebc->fast_mode = false;
-					is_enabling_fast_mode = true;
+				if (ebc->driver_mode ==
+					    ROCKCHIP_EBC_DRIVER_MODE_FAST ||
+				    enabling_mode ==
+				    ROCKCHIP_EBC_DRIVER_MODE_FAST) {
+					ebc->driver_mode = ROCKCHIP_EBC_DRIVER_MODE_NORMAL;
+					enabling_mode =
+						ROCKCHIP_EBC_DRIVER_MODE_FAST;
+					// TODO: use NEON implementation
 					for (int i = 0; i < ebc->num_pixels; ++i) {
 						u8 prelim = prelim_target[i] & 0xf0;
 						prelim_target[i] = prelim | prelim >> 4;
@@ -781,12 +887,14 @@ static void rockchip_ebc_partial_refresh(struct rockchip_ebc *ebc,
 				kernel_neon_begin();
 				rockchip_ebc_schedule_advance_neon(ebc, prelim_target, hints, phase_buffer, &clip_ongoing, &clip_ongoing_or_waiting, 0, ROCKCHIP_EBC_CUSTOM_WF_GC16, 0, ROCKCHIP_EBC_HINT_REDRAW, true);
 				kernel_neon_end();
+				// Skip a single advance as we have performed one just now
 				skip_advance = true;
 				no_schedule_until_clip_empty = true;
 				ebc->suspend_was_requested = 0;
 			}
 			work_item = 0;
 		} else if (drm_rect_width(&clip_ongoing_or_waiting) <= 0 &&
+			   !inhibit_suspend &&
 			   (is_suspending ||
 			    ((drm_rect_width(&clip_incoming) <= 0) &&
 			     (ktime_ms_delta(ktime_get(), time_last_start) >
@@ -799,39 +907,62 @@ static void rockchip_ebc_partial_refresh(struct rockchip_ebc *ebc,
 							  &clip_ongoing_or_waiting, &clip_incoming);
 			clip_incoming = DRM_RECT_EMPTY_EXTANDABLE;
 		}
-		pr_debug("%s frame=%d clip_ongoing=" DRM_RECT_FMT " clip_ongoing_or_waiting=" DRM_RECT_FMT " work_item=%d no_schedule_until_clip_empty=%d time_elapsed_since_last_start=%llu", __func__, frame, DRM_RECT_ARG(&clip_ongoing), DRM_RECT_ARG(&clip_ongoing_or_waiting), work_item, no_schedule_until_clip_empty, ktime_ms_delta(ktime_get(), time_last_start));
+		pr_debug(
+			"%s frame=%d clip_ongoing=" DRM_RECT_FMT
+			" clip_ongoing_or_waiting=" DRM_RECT_FMT
+			" work_item=%d no_schedule_until_clip_empty=%d time_elapsed_since_last_start=%llu",
+			__func__, frame, DRM_RECT_ARG(&clip_ongoing),
+			DRM_RECT_ARG(&clip_ongoing_or_waiting), work_item,
+			no_schedule_until_clip_empty,
+			ktime_ms_delta(ktime_get(), time_last_start));
+		pr_debug("%s ebc->driver_mode=%d enabling_mode=%d", __func__, ebc->driver_mode, enabling_mode);
 		if (drm_rect_width(&clip_ongoing_or_waiting) > 0 &&
 		    !skip_advance) {
-			if (ebc->fast_mode) {
+			u8 force_hint = 0;
+			// Disable redraws of redraw_delay <= 0
+			u8 force_hint_mask = ebc->redraw_delay > 0 ? 0 : ROCKCHIP_EBC_HINT_REDRAW;
+			if (ebc->driver_mode == ROCKCHIP_EBC_DRIVER_MODE_FAST) {
 				kernel_neon_begin();
 				rockchip_ebc_schedule_advance_fast_neon(
-					ebc, prelim_target, hints,
-					phase_buffer, &clip_ongoing,
-					&clip_ongoing_or_waiting,
-					early_cancellation_addition, 0, 0, 0,
-					!no_schedule_until_clip_empty && !work_item);
+					ebc, prelim_target, hints, phase_buffer,
+					&clip_ongoing, &clip_ongoing_or_waiting,
+					early_cancellation_addition, 0,
+					force_hint, force_hint_mask,
+					!no_schedule_until_clip_empty &&
+						!work_item);
 				kernel_neon_end();
-			} else {
+			} else if (ebc->driver_mode == ROCKCHIP_EBC_DRIVER_MODE_NORMAL) {
 				kernel_neon_begin();
 				rockchip_ebc_schedule_advance_neon(
-					ebc, prelim_target, hints,
-					phase_buffer, &clip_ongoing,
-					&clip_ongoing_or_waiting,
-					early_cancellation_addition, 0, 0, 0,
-					!no_schedule_until_clip_empty && !work_item);
+					ebc, prelim_target, hints, phase_buffer,
+					&clip_ongoing, &clip_ongoing_or_waiting,
+					early_cancellation_addition, 0,
+					force_hint, force_hint_mask,
+					!no_schedule_until_clip_empty &&
+						!work_item);
 				kernel_neon_end();
 			}
 		}
 		if (drm_rect_width(&clip_ongoing) <= 0 &&
 		    no_schedule_until_clip_empty) {
-			no_schedule_until_clip_empty = false;
-			if (is_enabling_fast_mode) {
-				ebc->fast_mode = true;
-				is_enabling_fast_mode = false;
-			}
-			if (is_disabling_fast_mode) {
-				ebc->fast_mode = false;
-				is_disabling_fast_mode = false;
+			if (enabling_mode ==
+				    ROCKCHIP_EBC_DRIVER_MODE_ZERO_WAVEFORM &&
+			    zero_waveform_mode_num_zero_phase_buffers < 2) {
+				memset(phase_buffer, 0, ebc->phase_size);
+				if (++zero_waveform_mode_num_zero_phase_buffers >=
+				    2) {
+					ebc->driver_mode =
+						ROCKCHIP_EBC_DRIVER_MODE_ZERO_WAVEFORM;
+					pr_info("Zero waveform mode enabled");
+				}
+			} else {
+				switch (enabling_mode) {
+				case ROCKCHIP_EBC_DRIVER_MODE_NORMAL:
+				case ROCKCHIP_EBC_DRIVER_MODE_FAST:
+					ebc->driver_mode = enabling_mode;
+					no_schedule_until_clip_empty = false;
+					break;
+				}
 			}
 		}
 		pr_debug("%s schedul2 frame=%d clip_ongoing=" DRM_RECT_FMT " clip_ongoing_or_waiting=" DRM_RECT_FMT,
@@ -854,7 +985,9 @@ static void rockchip_ebc_partial_refresh(struct rockchip_ebc *ebc,
 			num_frames_since_last_report = 0;
 			max_advance_time_since_last_report = 0;
 		}
-		awaiting_start = drm_rect_width(&clip_ongoing) > 0;
+		awaiting_start = drm_rect_width(&clip_ongoing) > 0 ||
+				 ebc->driver_mode ==
+					 ROCKCHIP_EBC_DRIVER_MODE_ZERO_WAVEFORM;
 		if (awaiting_start) {
 			// TODO: make sure we've synced all zeros as well
 			int win_start = clip_ongoing.y1 * ebc->phase_pitch + (direct_mode ? clip_ongoing.x1 / 4 : clip_ongoing.x1);
@@ -925,7 +1058,7 @@ static void rockchip_ebc_partial_refresh(struct rockchip_ebc *ebc,
 		s64 switch_buffer = 11700 - delta_advance - delta_wait - 1000;
 
 		// TODO: consider adding || !work_item
-		while(!is_suspending) {
+		while(!is_suspending && ebc->driver_mode != ROCKCHIP_EBC_DRIVER_MODE_ZERO_WAVEFORM) {
 			spin_lock(&ctx->buffer_switch_lock);
 			ctx->refresh_index = ctx->next_refresh_index;
 			for (int i = 0; i < 3; ++i) {
@@ -1688,7 +1821,7 @@ static int rockchip_ebc_waveform_init(struct rockchip_ebc *ebc)
 	const struct firmware * default_off_screen;
 	const struct firmware *custom_wf;
 
-	ret = drmm_epd_lut_file_init(drm, &ebc->lut_file, "rockchip/ebc.wbf");
+	ret = drmm_epd_lut_file_init(drm, &ebc->lut_file, EBC_FIRMWARE);
 	if (ret)
 		return ret;
 
@@ -1698,7 +1831,6 @@ static int rockchip_ebc_waveform_init(struct rockchip_ebc *ebc)
 		return ret;
 
 	if (!request_firmware(&custom_wf, EBC_CUSTOM_WF, drm->dev)) {
-		pr_debug("%s:%d\n", __func__, __LINE__);
 		size_t temp_range_size = 8 + ROCKCHIP_EBC_CUSTOM_WF_NUM_SEQS + ROCKCHIP_EBC_CUSTOM_WF_LUT_SIZE;
 		if ((custom_wf->size - 12) % temp_range_size) {
 			drm_err(drm, "Length error when loading custom_wf.bin\n");
@@ -1707,7 +1839,6 @@ static int rockchip_ebc_waveform_init(struct rockchip_ebc *ebc)
 			drm_err(drm, "Versioned magic comparison failed. Got %8ph, expected %8ph\n", custom_wf->data, custom_wf_magic_version);
 			ret = -EINVAL;
 		} else {
-			pr_debug("%s:%d\n", __func__, __LINE__);
 			unsigned int num_temp_ranges = (custom_wf->size - 12) / temp_range_size;
 			ebc->lut_custom.num_temp_ranges = num_temp_ranges;
 			ebc->lut_custom.luts = vzalloc(num_temp_ranges * sizeof(struct drm_epd_lut_temp_v2));
@@ -1715,7 +1846,6 @@ static int rockchip_ebc_waveform_init(struct rockchip_ebc *ebc)
 				drm_err(drm, "Failed to allocate lut_custom.luts\n");
 				ret = -ENOMEM;
 			} else {
-				pr_debug("%s:%d\n", __func__, __LINE__);
 				const u8 *fw_temp = custom_wf->data + 12;
 				for (int i = 0; i < num_temp_ranges; ++i) {
 					struct drm_epd_lut_temp_v2 *lut_temp = ebc->lut_custom.luts + i;
@@ -1732,19 +1862,17 @@ static int rockchip_ebc_waveform_init(struct rockchip_ebc *ebc)
 		drm_err(drm, "Unable to load custom_wf.bin\n");
 		ret = -EINVAL;
 	}
-	pr_debug("%s:%d\n", __func__, __LINE__);
 	release_firmware(custom_wf);
 	if (ret)
 		return ret;
 
 	// check if there is a default off-screen. Only the lowest four bits will be used per pixel
-	if (!request_firmware(&default_off_screen, "rockchip/rockchip_ebc_default_screen.bin", drm->dev))
+	if (!request_firmware(&default_off_screen, EBC_OFFCONTENT, drm->dev))
 	{
-		if (default_off_screen->size != 1314144)
-			drm_err(drm, "Size of default off_screen data file is not 1314144\n");
+		if (default_off_screen->size != ebc->num_pixels)
+			drm_err(drm, "Size of default off_screen data file is not %d\n", ebc->num_pixels);
 		else {
-			memcpy(ebc->final_off_screen, default_off_screen->data, 1314144);
-			memcpy(ebc->final_off_screen + 1314144, default_off_screen->data, 1314144);
+			memcpy(ebc->final_off_screen, default_off_screen->data, ebc->num_pixels);
 		}
 	} else {
 		// fill the off-screen with some values
@@ -2059,7 +2187,8 @@ static int rockchip_ebc_probe(struct platform_device *pdev)
 		*((u32 *) ebc->hardware_wf + 32) = 0xaaaaaaaa;
 	}
 
-	ebc->fast_mode = false;
+	ebc->driver_mode = ROCKCHIP_EBC_DRIVER_MODE_NORMAL;
+	ebc->redraw_delay = redraw_delay;
 
 	// Sensible temperature default
 	ebc->temperature = temp_override > 0 ? temp_override : 25;
