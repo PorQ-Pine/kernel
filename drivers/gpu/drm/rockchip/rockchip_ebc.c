@@ -159,7 +159,7 @@
 
 #define EBC_FIRMWARE		"rockchip/ebc.wbf"
 MODULE_FIRMWARE(EBC_FIRMWARE);
-#define EBC_OFFCONTENT "rockchip/rockchip_ebc_default_screen.bin"
+#define EBC_OFFCONTENT "rockchip/rockchip_ebc_default_screen_x4y4.bin"
 MODULE_FIRMWARE(EBC_OFFCONTENT);
 #define EBC_CUSTOM_WF "rockchip/custom_wf.bin"
 MODULE_FIRMWARE(EBC_CUSTOM_WF);
@@ -1854,19 +1854,17 @@ static int rockchip_ebc_waveform_init(struct rockchip_ebc *ebc)
 		drm_err(drm, "Unable to load custom_wf.bin\n");
 		ret = -EINVAL;
 	}
-	pr_debug("%s:%d\n", __func__, __LINE__);
 	release_firmware(custom_wf);
 	if (ret)
 		return ret;
 
 	// check if there is a default off-screen. Only the lowest four bits will be used per pixel
-	if (!request_firmware(&default_off_screen, "rockchip/rockchip_ebc_default_screen.bin", drm->dev))
+	if (!request_firmware(&default_off_screen, EBC_OFFCONTENT, drm->dev))
 	{
-		if (default_off_screen->size != 1314144)
-			drm_err(drm, "Size of default off_screen data file is not 1314144\n");
+		if (default_off_screen->size != ebc->num_pixels)
+			drm_err(drm, "Size of default off_screen data file is not %d\n", ebc->num_pixels);
 		else {
-			memcpy(ebc->final_off_screen, default_off_screen->data, 1314144);
-			memcpy(ebc->final_off_screen + 1314144, default_off_screen->data, 1314144);
+			memcpy(ebc->final_off_screen, default_off_screen->data, ebc->num_pixels);
 		}
 	} else {
 		// fill the off-screen with some values
