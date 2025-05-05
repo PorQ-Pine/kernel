@@ -243,6 +243,7 @@ void rockchip_ebc_blit_fb_r8_y4_hints_neon(const struct rockchip_ebc *ebc,
 					   const struct drm_framebuffer *fb,
 					   const struct drm_rect *src_clip);
 
+void rockchip_ebc_reset_inner_outer_neon(const struct rockchip_ebc *ebc);
 
 #define DRM_RECT_EMPTY_EXTANDABLE DRM_RECT_INIT(100000, 100000, -100000, -100000);
 
