@@ -1110,6 +1110,8 @@ static void rockchip_ebc_upd_temp(struct rockchip_ebc *ebc)
 			printk(KERN_INFO "rockchip-ebc: override temperature from %i to %i\n", temperature, temp_override);
 			temperature = temp_override;
 		}
+		// Early cancellation is broken right now for lower temperatures
+		temperature = max(temperature, 19);
 		ebc->temperature = temperature;
 
 		// TODO: figure out exclusivity/inclusivity and lowest and highest temperature range
