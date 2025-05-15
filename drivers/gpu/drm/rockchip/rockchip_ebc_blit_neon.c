@@ -248,6 +248,37 @@ void rockchip_ebc_schedule_advance_fast_neon(
 }
 EXPORT_SYMBOL(rockchip_ebc_schedule_advance_fast_neon);
 
+/**
+ * rockchip_ebc_schedule_advance_neon:
+ * Each pixel's state is in one of the following states:
+ * - IDLE: outer=0, inner=0. The pixel isn't undergoing any update.
+ * - WAITING: outer >= lut->offsets[WAITING]. Usually was changed to prelim
+ *     and is waiting to be redrawn as target.
+ * - ONGOING: outer > 0, outer < lut->offsets[WAITING]. The pixel is being
+ *     updated according to the sequence it's in.
+ * @ebc:
+ * @prelim_target: when using automatic redrawing, pixels that need to
+ *   be changed are first updated to prelim (Y4, 1 bpp, usually
+ *   dithered) and subsequentily changed to target (Y4, bit depth and
+ *   dithering was performed according to the hint by the atomic update
+ *   function.
+ * @hints:
+ * @clip_ongoing_or_waiting: minimum 16-byte aligned region containing
+ *   all pixels that are non-IDLE. This one is read and updated by this
+ *   function.
+ * @clip_ongoing: clip minimum 16-byte aligned region containing all piexls
+ *   that are neither IDLE nor WAITING. This one is set but not read by this
+ *   function.
+ * @early_cancellation_addition: number of additional phases to use when
+ *   cancelling cancellable 1 bpp updates.
+ * @force_wf: if set, use this waveform for all pixels instead of deriving it
+ *   from each pixel's hint.
+ * @force_hint: use these bits instead of each pixel's hint according to
+ *   force_hint_mask.
+ * @force_hint_mask: bits to overwrite with force_hint.
+ * @allow_schedule: if false, don't allow pixels to transition from IDLE and
+ *   disallow early cancellation.
+ */
 void rockchip_ebc_schedule_advance_neon(
 	const struct rockchip_ebc *ebc, const u8 *prelim_target, u8 *hints,
 	u8 *phase_buffer, struct drm_rect *clip_ongoing,
@@ -273,7 +304,7 @@ void rockchip_ebc_schedule_advance_neon(
 	u16 *u16_idxs = (u16 *)_idxs;
 	u8 *u8_lookup = (u8 *)_lookup;
 	memset(u8_lookup, 0, 16);
-	// Initialise for q8_us_y4_binary_table
+	// Initialise for q8_is_y4_binary_table
 	u8_lookup[0] = 0xff;
 	u8_lookup[15] = 0xff;
 
@@ -296,6 +327,7 @@ void rockchip_ebc_schedule_advance_neon(
 	uint8x16_t q8_0x20 = vdupq_n_u8(0x20);
 	uint8x16_t q8_0x21 = vdupq_n_u8(0x21);
 	uint8x16_t q8_0x80 = vdupq_n_u8(0x80);
+	uint8x16_t q8_offset_du4 = vdupq_n_u8(ebc->lut_custom_active->offsets[ROCKCHIP_EBC_CUSTOM_WF_DU4]);
 	uint8x16_t q8_offset_waiting = vdupq_n_u8(offset_waiting);
 	uint8x16_t q8_force_wf = vdupq_n_u8(force_wf);
 	uint8x16_t q8_force_hint = vdupq_n_u8(force_hint);
@@ -330,10 +362,14 @@ void rockchip_ebc_schedule_advance_neon(
 					  prelim_target_line += 16, hints_line += 16) {
 			uint8x16x3_t q8_inner_outer_nextprev =
 				vld3q_u8(packed_inner_outer_nextprev_line);
+			// 2 bit phase, 1 bit is_last, 5 bit num_repeats
 			uint8x16_t q8_inner = q8_inner_outer_nextprev.val[0];
+			// sequence index in LUT
 			uint8x16_t q8_outer = q8_inner_outer_nextprev.val[1];
+			// Y4 next, Y4 prev. Used in LUT
 			uint8x16_t q8_next_prev =
 				q8_inner_outer_nextprev.val[2];
+			// Y4 prelim (1 bpp dithered), Y4 target (as indicated by hints)
 			uint8x16_t q8_prelim_target =
 				vld1q_u8(prelim_target_line);
 			uint8x16_t q8_hints = vld1q_u8(hints_line);
@@ -350,12 +386,16 @@ void rockchip_ebc_schedule_advance_neon(
 			uint8x16_t q8_prelim = vshrq_n_u8(q8_prelim_target, 4);
 			uint8x16_t q8_target =
 				vandq_u8(q8_prelim_target, q8_0x0f);
+			// Overwrite per-pixel hint bits with any forced hint bits
 			q8_hints = vbslq_u8(q8_force_hint_mask, q8_force_hint,
 					    q8_hints);
+			// Per-pixel target waveform
 			uint8x16_t q8_wf_target =
 				vandq_u8(vshrq_n_u8(q8_hints, 4), q8_0x03);
+			// Overwrite per-pixel target waveform if there's a forced waveform (usually INIT or GC16 for global refreshes)
 			q8_wf_target = vbslq_u8(q8_force_wf_gt0, q8_force_wf,
 						q8_wf_target);
+			// TODO: consider renaming the rename hint to AUTO REDRAW
 			uint8x16_t q8_hint_redraw = vtstq_u8(q8_hints, q8_0x80);
 			uint8x16_t q8_hint_noredraw = vmvnq_u8(q8_hint_redraw);
 
@@ -363,8 +403,7 @@ void rockchip_ebc_schedule_advance_neon(
 				vceqq_u8(q8_next, q8_target);
 
 			// Start transforming
-			uint8x16_t q8_inner_num_is_1 =
-				vceqq_u8(q8_inner_num, q8_0x01);
+			uint8x16_t q8_inner_num_leq1 = vcleq_u8(q8_inner_num, q8_0x01);
 			// Saturating subtraction
 			uint8x16_t q8_inner_num_new =
 				vqsubq_u8(q8_inner_num, q8_0x01);
@@ -372,21 +411,21 @@ void rockchip_ebc_schedule_advance_neon(
 			uint8x16_t q8_inner_new =
 				vbslq_u8(q8_0x1f, q8_inner_num_new, q8_inner);
 
-			// Transition these to WAITING or IDLE, allow rescheduling
-			uint8x16_t q8_finish =
-				vandq_u8(q8_inner_num_is_1, q8_inner_is_last);
+			// Transition these to WAITING or IDLE, also allow rescheduling
+			uint8x16_t q8_to_finish =
+				vandq_u8(q8_inner_num_leq1, q8_inner_is_last);
 			// These can be rescheduled
-			uint8x16_t q8_waiting =
+			uint8x16_t q8_is_waiting =
 				vcgeq_u8(q8_outer, q8_offset_waiting);
 			// Transition these to REDRAW, allow rescheduling
 			uint8x16_t q8_finish_waiting =
-				vandq_u8(q8_finish, q8_waiting);
+				vandq_u8(q8_to_finish, q8_is_waiting);
 			// These can be scheduled, send to WAITING (hint changed in the meantime)
-			uint8x16_t q8_idle = vceqzq_u8(q8_inner);
-			uint8x16_t q8_waiting_idle =
-				vorrq_u8(q8_waiting, q8_idle);
-			uint8x16_t q8_waiting_idle_finish =
-				vorrq_u8(q8_waiting_idle, q8_finish);
+			uint8x16_t q8_is_idle = vceqzq_u8(q8_outer);
+			uint8x16_t q8_is_waiting_or_idle =
+				vorrq_u8(q8_is_waiting, q8_is_idle);
+			uint8x16_t q8_is_waiting_or_idle_or_to_finish =
+				vorrq_u8(q8_is_waiting_or_idle, q8_to_finish);
 
 			// For scheduling: choose between target/prelim
 			uint8x16_t q8_use_target = vorrq_u8(
@@ -397,7 +436,10 @@ void rockchip_ebc_schedule_advance_neon(
 			// Prelim uses waveform DU=0
 			uint8x16_t q8_wf =
 				vandq_u8(q8_wf_target, q8_use_target);
+
+			// Determine cancellability
 			uint8x16_t q8_wf_is_du = vceqzq_u8(q8_wf);
+			// 0xff if q8_targeT_or_prelim_new \in \{0x0, 0xf\}, 0x00 o.w.
 			uint8x16_t q8_target_or_prelim_is_binary = vqtbl1q_u8(
 				q8_is_y4_binary_table, q8_target_or_prelim_new);
 			uint8x16_t q8_next_is_binary =
@@ -406,7 +448,9 @@ void rockchip_ebc_schedule_advance_neon(
 				vqtbl1q_u8(q8_is_y4_binary_table, q8_prev);
 			uint8x16_t q8_next_and_prev_are_binary =
 				vandq_u8(q8_next_is_binary, q8_prev_is_binary);
-			uint8x16_t q8_outer_is_du = vceqq_u8(q8_outer, q8_0x01);
+			uint8x16_t q8_outer_is_du =
+				vandq_u8(vcltq_u8(q8_outer, q8_offset_du4),
+					 vcgeq_u8(q8_outer, q8_0x01));
 			uint8x16_t q8_src_cancellable = vandq_u8(
 				q8_next_and_prev_are_binary, q8_outer_is_du);
 			uint8x16_t q8_dst_cancellable = vandq_u8(
@@ -415,7 +459,7 @@ void rockchip_ebc_schedule_advance_neon(
 			uint8x16_t q8_can_cancel = vandq_u8(q8_src_cancellable,
 							    q8_dst_cancellable);
 			uint8x16_t q8_can_start_or_cancel =
-				vorrq_u8(q8_waiting_idle_finish, q8_can_cancel);
+				vorrq_u8(q8_is_waiting_or_idle_or_to_finish, q8_can_cancel);
 
 			// 1. Schedule: start target or prelim
 			uint8x16_t q8_start_scheduled = vandq_u8(
@@ -432,7 +476,6 @@ void rockchip_ebc_schedule_advance_neon(
 			uint8x16_t q8_prev_new =
 				vbslq_u8(q8_start_scheduled, q8_next, q8_prev);
 
-
 			// 2. Redraw: start target if still desired an we finished waiting
 			uint8x16_t q8_start_redraw = vandq_u8(
 				q8_allow_schedule,
@@ -444,6 +487,7 @@ void rockchip_ebc_schedule_advance_neon(
 					       q8_next_new);
 			q8_prev_new =
 				vbslq_u8(q8_start_redraw, q8_next, q8_prev_new);
+			// TODO: try uint8x16_t q8_next_prev_new = vsliq_n_u8(q8_next_new, q8_prev_new, 4);
 			uint8x16_t q8_next_prev_new = vorrq_u8(
 							       vshlq_n_u8(q8_next_new, 4), q8_prev_new);
 
@@ -453,10 +497,9 @@ void rockchip_ebc_schedule_advance_neon(
 			uint8x16_t q8_no_start_scheduled_or_redraw =
 				vmvnq_u8(q8_start_scheduled_or_redraw);
 			uint8x16_t q8_finish_no_start_scheduled_or_redraw =
-				vandq_u8(q8_finish,
+				vandq_u8(q8_to_finish,
 					 q8_no_start_scheduled_or_redraw);
-			uint8x16_t q8_outer_eq_0 = vceqzq_u8(q8_outer);
-			uint8x16_t q8_outer_gt_0 = vmvnq_u8(q8_outer_eq_0);
+			uint8x16_t q8_is_not_idle = vmvnq_u8(q8_is_idle);
 			// Start waiting if:
 			// We finish, but we don't start schedule/redraw AND next != target, AND allow_schedule
 			// Or: We are not running AND we didn't schedule (next=prelim) AND next != target AND allow_schedule
@@ -465,85 +508,100 @@ void rockchip_ebc_schedule_advance_neon(
 				vorrq_u8(
 					q8_finish_no_start_scheduled_or_redraw,
 					vandq_u8(
-						q8_outer_eq_0,
+						q8_is_idle,
 						q8_no_start_scheduled_or_redraw)),
 				vandq_u8(q8_allow_schedule,
 					 vmvnq_u8(q8_next_eq_target)));
 			uint8x16_t q8_start_idle =
 				vandq_u8(q8_finish_no_start_scheduled_or_redraw,
 					 vandq_u8(vmvnq_u8(q8_start_waiting),
-						  q8_outer_gt_0));
+						  q8_is_not_idle));
 			uint8x16_t q8_start = vorrq_u8(
 						       q8_start_scheduled_or_redraw, q8_start_waiting);
 
 			// 4. Get outer_new
-			uint8x16_t q8_outer_new =
-				vandq_u8(vqaddq_u8(q8_outer, q8_0x01),
-					 vmvnq_u8(q8_inner_is_last));
-			q8_outer_new = vbslq_u8(q8_inner_num_is_1, q8_outer_new,
-						q8_outer);
+			uint8x16_t q8_outer_p1 = vqaddq_u8(q8_outer, q8_0x01);
+			// If last, overwrite outer+1 with 0. If inner
+			// > 1, we'll stick to outer anyway. If we
+			// transition to WAITING or RESCHEDULE this
+			// one will get overwritten later
+			uint8x16_t q8_inner_is_not_last = vmvnq_u8(q8_inner_is_last);
+			uint8x16_t q8_outer_new = vandq_u8(q8_outer_p1, q8_inner_is_not_last);
+			// Increment outer by 1 if inner <= 1 AND outer > 0
+			uint8x16_t q8_outer_increment_cond = vandq_u8(q8_inner_num_leq1, q8_is_not_idle);
+			q8_outer_new = vbslq_u8(q8_outer_increment_cond,
+						q8_outer_new, q8_outer);
 			q8_outer_new = vbslq_u8(
 				q8_start, vqtbl1q_u8(q8_offsets_table, q8_wf),
 				q8_outer_new);
-			// Or: replace q8_wf with WAITING before the previous statement
+			// TODO: replace q8_wf with WAITING before the previous statement, as q8_start_waiting \implies q8_start
 			q8_outer_new = vbslq_u8(q8_start_waiting,
 						q8_offset_waiting,
 						q8_outer_new);
 
-			// 5. Get inner_new
-			uint16x8_t q16_idx_low =
-				vmovl_u8(vget_low_u8(q8_outer_new));
-			q16_idx_low = vaddq_u16(
-				q16_idx_low,
-				vqshlq_n_u16(
-					vmovl_u8(vget_low_u8(q8_prev_new)),
-					4 + ROCKCHIP_EBC_CUSTOM_WF_SEQ_SHIFT));
-			q16_idx_low = vaddq_u16(
-				q16_idx_low,
-				vshll_n_u8(vget_low_u8(q8_next_new),
-					   ROCKCHIP_EBC_CUSTOM_WF_SEQ_SHIFT));
-			vst1q_u16(u16_idxs, q16_idx_low);
-			uint16x8_t q16_idx_high =
-				vmovl_u8(vget_high_u8(q8_outer_new));
-			q16_idx_high = vaddq_u16(
-				q16_idx_high,
-				vqshlq_n_u16(
-					vmovl_u8(vget_high_u8(q8_prev_new)),
-					4 + ROCKCHIP_EBC_CUSTOM_WF_SEQ_SHIFT));
-			q16_idx_high = vaddq_u16(
-				q16_idx_high,
-				vshll_n_u8(vget_high_u8(q8_next_new),
-					   ROCKCHIP_EBC_CUSTOM_WF_SEQ_SHIFT));
-			vst1q_u16(u16_idxs + 8, q16_idx_high);
-			u8_lookup[0] = lut[u16_idxs[0]];
-			u8_lookup[1] = lut[u16_idxs[1]];
-			u8_lookup[2] = lut[u16_idxs[2]];
-			u8_lookup[3] = lut[u16_idxs[3]];
-			u8_lookup[4] = lut[u16_idxs[4]];
-			u8_lookup[5] = lut[u16_idxs[5]];
-			u8_lookup[6] = lut[u16_idxs[6]];
-			u8_lookup[7] = lut[u16_idxs[7]];
-			u8_lookup[8] = lut[u16_idxs[8]];
-			u8_lookup[9] = lut[u16_idxs[9]];
-			u8_lookup[10] = lut[u16_idxs[10]];
-			u8_lookup[11] = lut[u16_idxs[11]];
-			u8_lookup[12] = lut[u16_idxs[12]];
-			u8_lookup[13] = lut[u16_idxs[13]];
-			u8_lookup[14] = lut[u16_idxs[14]];
-			u8_lookup[15] = lut[u16_idxs[15]];
-			uint8x16_t q8_inner_new_from_lut = vld1q_u8(u8_lookup);
+			uint8x16_t q8_lookup_condition = vorrq_u8(q8_start, vandq_u8(q8_outer_increment_cond, q8_inner_is_not_last));
+			if (vmaxvq_u8(q8_lookup_condition)) {
+				// 5. Get inner_new
+				uint16x8_t q16_idx_low =
+					vmovl_u8(vget_low_u8(q8_outer_new));
+				q16_idx_low = vaddq_u16(
+					q16_idx_low,
+					vqshlq_n_u16(
+						vmovl_u8(vget_low_u8(
+							q8_prev_new)),
+						4 + ROCKCHIP_EBC_CUSTOM_WF_SEQ_SHIFT));
+				q16_idx_low = vaddq_u16(
+					q16_idx_low,
+					vshll_n_u8(
+						vget_low_u8(q8_next_new),
+						ROCKCHIP_EBC_CUSTOM_WF_SEQ_SHIFT));
+				vst1q_u16(u16_idxs, q16_idx_low);
+				uint16x8_t q16_idx_high =
+					vmovl_u8(vget_high_u8(q8_outer_new));
+				q16_idx_high = vaddq_u16(
+					q16_idx_high,
+					vqshlq_n_u16(
+						vmovl_u8(vget_high_u8(
+							q8_prev_new)),
+						4 + ROCKCHIP_EBC_CUSTOM_WF_SEQ_SHIFT));
+				q16_idx_high = vaddq_u16(
+					q16_idx_high,
+					vshll_n_u8(
+						vget_high_u8(q8_next_new),
+						ROCKCHIP_EBC_CUSTOM_WF_SEQ_SHIFT));
+				vst1q_u16(u16_idxs + 8, q16_idx_high);
+				u8_lookup[0] = lut[u16_idxs[0]];
+				u8_lookup[1] = lut[u16_idxs[1]];
+				u8_lookup[2] = lut[u16_idxs[2]];
+				u8_lookup[3] = lut[u16_idxs[3]];
+				u8_lookup[4] = lut[u16_idxs[4]];
+				u8_lookup[5] = lut[u16_idxs[5]];
+				u8_lookup[6] = lut[u16_idxs[6]];
+				u8_lookup[7] = lut[u16_idxs[7]];
+				u8_lookup[8] = lut[u16_idxs[8]];
+				u8_lookup[9] = lut[u16_idxs[9]];
+				u8_lookup[10] = lut[u16_idxs[10]];
+				u8_lookup[11] = lut[u16_idxs[11]];
+				u8_lookup[12] = lut[u16_idxs[12]];
+				u8_lookup[13] = lut[u16_idxs[13]];
+				u8_lookup[14] = lut[u16_idxs[14]];
+				u8_lookup[15] = lut[u16_idxs[15]];
+				uint8x16_t q8_inner_new_from_lut =
+					vld1q_u8(u8_lookup);
+				q8_inner_new = vbslq_u8(q8_lookup_condition,
+							q8_inner_new_from_lut,
+							q8_inner_new);
+			}
 			q8_inner_new =
-				vbslq_u8(vorrq_u8(q8_inner_num_is_1, q8_start),
-					 q8_inner_new_from_lut, q8_inner_new);
-			q8_inner_new =
-				vbslq_u8(q8_start_idle, q8_0x21, q8_inner_new);
+				vbslq_u8(q8_start_idle, q8_0x00, q8_inner_new);
 
 			// 6. Early cancellation
+			// TODO: this is broken for lower temperatures if more than 0x1f frames are required
 			// TODO: DU4 may be cancellable as well for binary src and dst
 			uint8x16_t q8_cancel = vandq_u8(
 				q8_start,
 				vandq_u8(q8_can_cancel,
-					 vmvnq_u8(q8_waiting_idle_finish)));
+					 vmvnq_u8(q8_is_waiting_or_idle_or_to_finish)));
 			uint8x16_t q8_to_subtract =
 				vandq_u8(q8_cancel, q8_inner_num);
 			q8_inner_num_new =
