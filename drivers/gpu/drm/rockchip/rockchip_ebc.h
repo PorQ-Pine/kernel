@@ -130,6 +130,8 @@ struct rockchip_ebc {
 	int				suspend_was_requested;
 	// Cached temperature in deg C
 	int				temperature;
+	struct drm_rockchip_ebc_phase_sequence	*phase_sequence;
+	spinlock_t			phase_sequence_lock;
 };
 
 /**

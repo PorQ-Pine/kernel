@@ -107,7 +107,8 @@ void rockchip_ebc_schedule_advance_fast_neon(
 			uint8x16_t q8_inner_new =
 				vbslq_u8(q8_0x1f, q8_inner_num_new, q8_inner);
 
-			// These can be scheduled, send to WAITING (hint changed in the meantime)
+			// These can be scheduled (next != target, next != prelim) or sent to WAITING (next == prelim, next != target)
+			// TODO: merge these into a single q8_inner_num <= 1
 			uint8x16_t q8_idle = vceqzq_u8(q8_inner);
 			uint8x16_t q8_idle_finish =
 				vorrq_u8(q8_idle, q8_inner_num_is_1);
