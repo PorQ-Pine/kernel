@@ -536,14 +536,20 @@ static int cyttsp5_validate_cmd_response(struct cyttsp5 *ts, u8 code)
 
 static int cyttsp5_hid_output_app_write_and_wait(struct cyttsp5 *ts,
 						 u8 cmd_code, u8* data,
-						 ssize_t data_len,
+						 u16 data_len,
 						 u16 timeout_ms)
 {
 	int rc;
-	u8 cmd[HID_OUTPUT_MAX_CMD_SIZE];
+	u8 small_cmd[HID_OUTPUT_MAX_CMD_SIZE];
+	u8 *cmd;
+	u16 total_len = 6 + data_len;
 
-	if (6 + data_len > HID_OUTPUT_MAX_CMD_SIZE)
-		return -E2BIG;
+	if (total_len > HID_OUTPUT_MAX_CMD_SIZE) {
+		cmd = kzalloc(total_len, GFP_KERNEL);
+		if (!cmd)
+			return -ENOMEM;
+	} else
+		cmd = small_cmd;
 
 	cmd[0] = (HID_OUTPUT_REG >> 8) & 0xFF;
 	put_unaligned_le16(5 + data_len, cmd + 1);
@@ -557,7 +563,7 @@ static int cyttsp5_hid_output_app_write_and_wait(struct cyttsp5 *ts,
 	rc = regmap_bulk_write(ts->regmap, HID_OUTPUT_REG & 0xFF, cmd, total_len);
 	if (rc) {
 		dev_err(ts->dev, "Failed to write command %d\n", rc);
-		return rc;
+		goto exit;
 	}
 
 	if (!timeout_ms)
@@ -568,16 +574,20 @@ static int cyttsp5_hid_output_app_write_and_wait(struct cyttsp5 *ts,
 	if (rc <= 0) {
 		dev_err(ts->dev, "HID output cmd execution timed out\n");
 		rc = -ETIMEDOUT;
-		return rc;
+		goto exit;
 	}
 
 	rc = cyttsp5_validate_cmd_response(ts, cmd_code);
 	if (rc) {
 		dev_err(ts->dev, "Validation of the response failed\n");
-		return rc;
+		goto exit;
 	}
 
-	return 0;
+exit:
+	if (total_len > HID_OUTPUT_MAX_CMD_SIZE) {
+		kfree(cmd);
+	}
+	return rc;
 }
 
 static void cyttsp5_si_get_btn_data(struct cyttsp5 *ts)
