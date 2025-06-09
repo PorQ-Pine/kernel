@@ -1,0 +1,2 @@
+::sysinit:/etc/init.d/rcS
+ttyS2::respawn:/sbin/getty "-L" "ttyS2" "1500000" "linux"

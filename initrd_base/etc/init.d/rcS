@@ -1,0 +1,20 @@
+#!/bin/sh
+
+# Bare-bones userspace initialization
+export TERM="linux"
+mount -t proc proc /proc
+mount -t sysfs sysfs /sys
+mount -t devtmpfs devtmpfs /dev
+mount -t tmpfs tmpfs
+hostname pinenote
+ifconfig lo up
+
+read -t 5 -n 1 -s -r -p "(initrd) Hit any key to stop auto-boot ... " KEY
+echo
+
+if [ -z "${KEY}" ]; then
+	# We should execute the main Rust program at this point
+	:
+else
+	exit 0
+fi
