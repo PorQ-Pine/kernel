@@ -183,3 +183,4 @@ sphinx_*/
 /rust-project.json
 
 initrd
+initrd_base/lib/modules
