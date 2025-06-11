@@ -184,3 +184,4 @@ sphinx_*/
 
 initrd
 initrd_base/lib/modules
+initrd_base/.commit
