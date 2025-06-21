@@ -175,6 +175,7 @@ static const char *custom_wf_magic_version = "CLUT0002";
 #define ROCKCHIP_EBC_WORK_ITEM_ENABLE_FAST_MODE			BIT(6)
 #define ROCKCHIP_EBC_WORK_ITEM_ENABLE_ZERO_WAVEFORM_MODE	BIT(7)
 #define ROCKCHIP_EBC_WORK_ITEM_DISABLE_ZERO_WAVEFORM_MODE	BIT(8)
+#define ROCKCHIP_EBC_WORK_ITEM_ENABLE_PHASE_SEQUENCE_MODE	BIT(9)
 
 static const u8 dither_bayer_04[] = {
 	7, 8, 2, 10, 7, 8, 2, 10, 7, 8, 2, 10, 7, 8, 2, 10,
@@ -595,6 +596,34 @@ static int ioctl_zero_waveform(struct drm_device *dev, void *data,
 				ROCKCHIP_EBC_DRIVER_MODE_ZERO_WAVEFORM;
 	}
 
+	wake_up_process(ebc->refresh_thread);
+	return 0;
+}
+
+static int ioctl_phase_sequence(struct drm_device *dev, void *data,
+				struct drm_file *file_priv)
+{
+	struct rockchip_ebc *ebc = dev_get_drvdata(dev->dev);
+
+	spin_lock(&ebc->phase_sequence_lock);
+	memcpy(ebc->phase_sequence, data,
+	       sizeof(struct drm_rockchip_ebc_phase_sequence));
+
+	// Driving
+	ebc->phase_sequence->num_seqs = min(ebc->phase_sequence->num_seqs,
+					    ROCKCHIP_EBC_MAX_PHASE_SEQUENCES);
+	for (int i = 0; i < ebc->phase_sequence->num_seqs; ++i) {
+		ebc->phase_sequence->elms[i].num_regions =
+			min(ebc->phase_sequence->elms[i].num_regions,
+			    ROCKCHIP_EBC_MAX_REGIONS);
+	}
+	spin_unlock(&ebc->phase_sequence_lock);
+	spin_lock(&ebc->work_item_lock);
+	ebc->work_item |= ROCKCHIP_EBC_WORK_ITEM_ENABLE_PHASE_SEQUENCE_MODE;
+	spin_unlock(&ebc->work_item_lock);
+
+	wake_up_process(ebc->refresh_thread);
+
 	return 0;
 }
 
@@ -609,6 +638,8 @@ static const struct drm_ioctl_desc ioctls[DRM_COMMAND_END - DRM_COMMAND_BASE] = 
 			  DRM_RENDER_ALLOW),
 	DRM_IOCTL_DEF_DRV(ROCKCHIP_EBC_MODE, ioctl_mode, DRM_RENDER_ALLOW),
 	DRM_IOCTL_DEF_DRV(ROCKCHIP_EBC_ZERO_WAVEFORM, ioctl_zero_waveform,
+			  DRM_RENDER_ALLOW),
+	DRM_IOCTL_DEF_DRV(ROCKCHIP_EBC_PHASE_SEQUENCE, ioctl_phase_sequence,
 			  DRM_RENDER_ALLOW),
 };
 
@@ -724,6 +755,132 @@ static void print_lut(struct rockchip_ebc *ebc)
 	pr_info("%s lut=%64ph", __func__, lut + 15 * 64);
 }
 
+static void rockchip_ebc_blit_direct_phase(struct rockchip_ebc *ebc,
+					   u8 *phase_buffer,
+					   struct drm_mode_rect *rect, u8 phase)
+{
+	u8 phases[3] = {0x00, 0x55, 0xaa};
+	phase = phases[phase & 3];
+	int x1 = max(0, rect->x1);
+	int x2 = min((int) ebc->pixel_pitch, rect->x2);
+
+	u8 *line = phase_buffer;
+	for (int y = max(0, rect->y1); y < min((int) ebc->height, rect->y2); ++y) {
+		memset(line + y * ebc->phase_pitch + (x1 >> 2), phase, (x2 >> 2) - (x1 >> 2));
+	}
+}
+
+static void rockchip_ebc_phase_sequence(struct rockchip_ebc *ebc)
+{
+	struct drm_device *drm = &ebc->drm;
+	struct device *dev = drm->dev;
+
+	spin_lock(&ebc->phase_sequence_lock);
+	struct drm_rockchip_ebc_phase_sequence *ps = ebc->phase_sequence;
+
+	int previous_temp_override = temp_override;
+	u32 frame_counter;
+	if (ps->do_force_temperature)
+		temp_override = ps->force_temperature;
+
+	if (ps->do_init || ps->do_gc16)
+		rockchip_ebc_change_lut(ebc);
+
+	struct drm_epd_lut_temp_v2 *lut = ebc->lut_custom_active;
+	u8 phases[3] = { 0x00, 0x55, 0xaa };
+	u32 frame = 0;
+	bool awaiting_completion = false;
+
+	// TODO: consider performing do_init and go_gc16 in partial_refresh function
+	if (ps->do_init) {
+		u8 outer = lut->offsets[ROCKCHIP_EBC_CUSTOM_WF_INIT];
+		u8 inner = lut->lut[outer];
+		for (frame = 0;; frame++) {
+			u8 phase = phases[(inner & 0xc0) >> 6];
+			dma_addr_t phase_handle = ebc->phase_handles[phase % 2];
+			if (inner & 0x1f) {
+				memset(ebc->phase[frame % 2], phase, ebc->phase_size);
+				inner -= 1;
+			}
+			if (!(inner & 0x1f)) {
+				if (inner & 0x20)
+					break;
+				else
+					inner = lut->lut[++outer];
+			}
+			dma_sync_single_for_device(dev, phase_handle,
+						   ebc->phase_size,
+						   DMA_TO_DEVICE);
+			if (awaiting_completion && !wait_for_completion_timeout(&ebc->display_end, EBC_FRAME_TIMEOUT)) {
+				pr_err("Frame %d timed out!\n", frame);
+			}
+			awaiting_completion = false;
+			regmap_write(ebc->regmap, EBC_WIN_MST0, phase_handle);
+			regmap_write(ebc->regmap, EBC_CONFIG_DONE,
+				     EBC_CONFIG_DONE_REG_CONFIG_DONE);
+			regmap_write(ebc->regmap, EBC_DSP_START,
+				     ebc->dsp_start |
+					     EBC_DSP_START_DSP_FRM_START);
+			awaiting_completion = true;
+		}
+		fsleep(ps->delay_ms * 1000);
+	}
+	if (awaiting_completion && !wait_for_completion_timeout(&ebc->display_end, EBC_FRAME_TIMEOUT)) {
+		pr_err("Frame %d timed out!\n", frame);
+	}
+	awaiting_completion = false;
+
+	if (ps->do_gc16) {
+		// TODO:
+		fsleep(ps->delay_ms * 1000);
+	}
+
+	frame = 0;
+	for (int i_seq = 0; i_seq < ps->num_seqs; ++i_seq) {
+		struct drm_rockchip_ebc_phase_sequence_element *elm =
+			ps->elms + i_seq;
+		for (int i_frame = 0; i_frame < elm->num_frames;
+				      ++i_frame, ++frame) {
+			ktime_t t1 = ktime_get();
+			if (i_frame < 2) {
+				for (int i_region = 0;
+				     i_region < elm->num_regions; ++i_region) {
+					rockchip_ebc_blit_direct_phase(
+						ebc, ebc->phase[frame % 2],
+						elm->rect + i_region,
+						elm->phase[i_region]);
+				}
+			}
+			dma_sync_single_for_device(dev, ebc->phase_handles[frame % 2],
+						   ebc->phase_size,
+						   DMA_TO_DEVICE);
+			if (awaiting_completion && !wait_for_completion_timeout(&ebc->display_end, EBC_FRAME_TIMEOUT)) {
+				pr_err("Frame %d timed out!\n", frame);
+			}
+			awaiting_completion = false;
+			regmap_write(ebc->regmap, EBC_WIN_MST0,
+				     ebc->phase_handles[frame % 2]);
+			regmap_write(ebc->regmap, EBC_CONFIG_DONE,
+				     EBC_CONFIG_DONE_REG_CONFIG_DONE);
+			s64 delay_frame = elm->delay_ms * 1000 -
+				ktime_us_delta(ktime_get(), t1);
+			if (delay_frame > 0)
+				fsleep(delay_frame);
+			regmap_write(ebc->regmap, EBC_DSP_START,
+				     ebc->dsp_start |
+					     EBC_DSP_START_DSP_FRM_START);
+			awaiting_completion = true;
+		}
+
+	}
+	if (ps->do_force_temperature) {
+		temp_override = previous_temp_override;
+		rockchip_ebc_change_lut(ebc);
+	}
+
+	spin_unlock(&ebc->phase_sequence_lock);
+}
+
 static void rockchip_ebc_partial_refresh(struct rockchip_ebc *ebc,
 					 struct rockchip_ebc_ctx *ctx)
 {
@@ -836,6 +993,10 @@ static void rockchip_ebc_partial_refresh(struct rockchip_ebc *ebc,
 				   ebc->driver_mode != ROCKCHIP_EBC_DRIVER_MODE_NORMAL) {
 				no_schedule_until_clip_empty = true;
 				enabling_mode = ROCKCHIP_EBC_DRIVER_MODE_NORMAL;
+			} else if (work_item &
+				   ROCKCHIP_EBC_WORK_ITEM_ENABLE_PHASE_SEQUENCE_MODE) {
+				no_schedule_until_clip_empty = true;
+				enabling_mode = ROCKCHIP_EBC_DRIVER_MODE_PHASE_SEQUENCE;
 			}
 			if (work_item & ROCKCHIP_EBC_WORK_ITEM_CHANGE_LUT) {
 				rockchip_ebc_change_lut(ebc);
@@ -961,6 +1122,10 @@ static void rockchip_ebc_partial_refresh(struct rockchip_ebc *ebc,
 				case ROCKCHIP_EBC_DRIVER_MODE_FAST:
 					ebc->driver_mode = enabling_mode;
 					no_schedule_until_clip_empty = false;
+					break;
+				case ROCKCHIP_EBC_DRIVER_MODE_PHASE_SEQUENCE:
+					rockchip_ebc_phase_sequence(ebc);
+					enabling_mode = ROCKCHIP_EBC_DRIVER_MODE_ZERO_WAVEFORM;
 					break;
 				}
 			}
@@ -2154,6 +2319,11 @@ static int rockchip_ebc_probe(struct platform_device *pdev)
 	      ebc->phase[1])) {
 		return dev_err_probe(dev, -ENOMEM, "Failed to allocate buffers\n");
 	}
+	ebc->phase_sequence = drmm_kzalloc(
+		&ebc->drm, sizeof(struct drm_rockchip_ebc_phase_sequence),
+		GFP_KERNEL);
+	if (!ebc->phase_sequence)
+		return dev_err_probe(dev, -ENOMEM, "Failed to allocate phase_sequence buffer\n");
 	ebc->phase_handles[0] = dma_map_single(dev, ebc->phase[0], ebc->phase_size,
 					       DMA_TO_DEVICE);
 	if (dma_mapping_error(dev, ebc->phase_handles[0])) {
@@ -2199,6 +2369,7 @@ static int rockchip_ebc_probe(struct platform_device *pdev)
 
 	spin_lock_init(&ebc->work_item_lock);
 	spin_lock_init(&ebc->hints_ioctl_lock);
+	spin_lock_init(&ebc->phase_sequence_lock);
 	ebc->suspend_was_requested = 0;
 
 	platform_set_drvdata(pdev, ebc);

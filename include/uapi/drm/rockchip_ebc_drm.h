@@ -20,6 +20,7 @@ extern "C" {
 #define ROCKCHIP_EBC_DRIVER_MODE_NORMAL			0
 #define ROCKCHIP_EBC_DRIVER_MODE_FAST			1
 #define ROCKCHIP_EBC_DRIVER_MODE_ZERO_WAVEFORM		8
+#define ROCKCHIP_EBC_DRIVER_MODE_PHASE_SEQUENCE		9
 
 #define ROCKCHIP_EBC_DITHER_MODE_BAYER		0
 #define ROCKCHIP_EBC_DITHER_MODE_BLUE_NOISE_16	1
@@ -130,7 +131,31 @@ struct drm_rockchip_ebc_zero_waveform {
 	__u8	_pad[6];
 };
 
-#define DRM_ROCKCHIP_EBC_NUM_IOCTLS		0x06
+#define ROCKCHIP_EBC_MAX_PHASE_SEQUENCES 96
+#define ROCKCHIP_EBC_MAX_REGIONS 8
+
+struct drm_rockchip_ebc_phase_sequence_element {
+	__u32			delay_ms;
+	__u8			num_frames;
+	__u8			_pad[3];
+	__u32			num_regions;
+	struct drm_mode_rect	rect[ROCKCHIP_EBC_MAX_REGIONS];
+	__u8			phase[ROCKCHIP_EBC_MAX_REGIONS];
+};
+
+struct drm_rockchip_ebc_phase_sequence {
+	__u8						num_seqs;
+	__u8						do_init;
+	__u8						do_gc16;
+	__u8						gc_target;
+	__u8						do_force_temperature;
+	__u8						force_temperature;
+	__u8						_pad[6];
+	__u32						delay_ms;
+	struct drm_rockchip_ebc_phase_sequence_element elms[ROCKCHIP_EBC_MAX_PHASE_SEQUENCES];
+};
+
+#define DRM_ROCKCHIP_EBC_NUM_IOCTLS		0x07
 
 #define DRM_IOCTL_ROCKCHIP_EBC_GLOBAL_REFRESH	DRM_IOWR(DRM_COMMAND_BASE + 0x00, struct drm_rockchip_ebc_trigger_global_refresh)
 #define DRM_IOCTL_ROCKCHIP_EBC_OFF_SCREEN	DRM_IOW(DRM_COMMAND_BASE + 0x01, struct drm_rockchip_ebc_off_screen)
@@ -138,6 +163,7 @@ struct drm_rockchip_ebc_zero_waveform {
 #define DRM_IOCTL_ROCKCHIP_EBC_RECT_HINTS	DRM_IOW(DRM_COMMAND_BASE + 0x03, struct drm_rockchip_ebc_rect_hints)
 #define DRM_IOCTL_ROCKCHIP_EBC_MODE		DRM_IOWR(DRM_COMMAND_BASE + 0x04, struct drm_rockchip_ebc_mode)
 #define DRM_IOCTL_ROCKCHIP_EBC_ZERO_WAVEFORM	DRM_IOWR(DRM_COMMAND_BASE + 0x05, struct drm_rockchip_ebc_zero_waveform)
+#define DRM_IOCTL_ROCKCHIP_EBC_PHASE_SEQUENCE	DRM_IOW(DRM_COMMAND_BASE + 0x06, struct drm_rockchip_ebc_phase_sequence)
 
 #if defined(__cplusplus)
 }
