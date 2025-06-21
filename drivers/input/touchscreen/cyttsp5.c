@@ -13,6 +13,7 @@
 #include <linux/crc-itu-t.h>
 #include <linux/delay.h>
 #include <linux/device.h>
+#include <linux/firmware.h>
 #include <linux/gpio/consumer.h>
 #include <linux/input/mt.h>
 #include <linux/input/touchscreen.h>
@@ -20,7 +21,9 @@
 #include <linux/i2c.h>
 #include <linux/mod_devicetable.h>
 #include <linux/module.h>
+#include "linux/pm_runtime.h"
 #include <linux/regmap.h>
+#include "linux/spinlock.h"
 #include <linux/unaligned.h>
 
 #define CYTTSP5_NAME				"cyttsp5"
@@ -38,8 +41,11 @@
 #define HID_OUTPUT_BL_LAUNCH_APP_SIZE		11
 #define HID_OUTPUT_GET_SYSINFO			0x2
 #define HID_OUTPUT_GET_SYSINFO_SIZE		5
+#define HID_OUTPUT_VERIFY_CONFIG_BLOCK_CRC	0x20
 #define HID_OUTPUT_GET_CONFIG_ROW_SIZE		0x21
 #define HID_OUTPUT_READ_CONF_BLOCK		0x22
+#define HID_OUTPUT_WRITE_CONF_BLOCK		0x23
+#define HID_OUTPUT_WRITE_CONF_BLOCK_TIMEOUT_MS	400
 #define HID_OUTPUT_SUSPEND_SCANNING		3
 #define HID_OUTPUT_SUSPEND_SCANNING_TIMEOUT_MS	1000
 #define HID_OUTPUT_RESUME_SCANNING		4
@@ -124,6 +130,13 @@
 
 #define CY_TCH_PARM_EBID			0
 #define CY_DATA_ROW_SIZE			128
+
+#define CY_FIRMWARE_CONFIG			"cypress/cyttsp_config.bin"
+MODULE_FIRMWARE(CY_FIRMWARE_CONFIG);
+
+static const u8 cyttps5_security_key[] = {
+	0xA5, 0x01, 0x02, 0x03, 0xFF, 0xFE, 0xFD, 0x5A
+};
 
 /* System Information interface definitions */
 struct cyttsp5_sensing_conf_data_dev {
@@ -218,6 +231,7 @@ struct cyttsp5 {
 	struct regmap *regmap;
 	struct touchscreen_properties prop;
 	struct regulator_bulk_data supplies[2];
+	spinlock_t exclusive_lock;
 };
 
 /*
@@ -522,14 +536,20 @@ static int cyttsp5_validate_cmd_response(struct cyttsp5 *ts, u8 code)
 
 static int cyttsp5_hid_output_app_write_and_wait(struct cyttsp5 *ts,
 						 u8 cmd_code, u8* data,
-						 ssize_t data_len,
+						 u16 data_len,
 						 u16 timeout_ms)
 {
 	int rc;
-	u8 cmd[HID_OUTPUT_MAX_CMD_SIZE];
+	u8 small_cmd[HID_OUTPUT_MAX_CMD_SIZE];
+	u8 *cmd;
+	u16 total_len = 6 + data_len;
 
-	if (6 + data_len > HID_OUTPUT_MAX_CMD_SIZE)
-		return -E2BIG;
+	if (total_len > HID_OUTPUT_MAX_CMD_SIZE) {
+		cmd = kzalloc(total_len, GFP_KERNEL);
+		if (!cmd)
+			return -ENOMEM;
+	} else
+		cmd = small_cmd;
 
 	cmd[0] = (HID_OUTPUT_REG >> 8) & 0xFF;
 	put_unaligned_le16(5 + data_len, cmd + 1);
@@ -540,10 +560,10 @@ static int cyttsp5_hid_output_app_write_and_wait(struct cyttsp5 *ts,
 	if (data_len)
 		memcpy(cmd + 6, data, data_len);
 
-	rc = regmap_bulk_write(ts->regmap, HID_OUTPUT_REG & 0xFF, cmd, 6 + data_len);
+	rc = regmap_bulk_write(ts->regmap, HID_OUTPUT_REG & 0xFF, cmd, total_len);
 	if (rc) {
 		dev_err(ts->dev, "Failed to write command %d\n", rc);
-		return rc;
+		goto exit;
 	}
 
 	if (!timeout_ms)
@@ -554,16 +574,20 @@ static int cyttsp5_hid_output_app_write_and_wait(struct cyttsp5 *ts,
 	if (rc <= 0) {
 		dev_err(ts->dev, "HID output cmd execution timed out\n");
 		rc = -ETIMEDOUT;
-		return rc;
+		goto exit;
 	}
 
 	rc = cyttsp5_validate_cmd_response(ts, cmd_code);
 	if (rc) {
 		dev_err(ts->dev, "Validation of the response failed\n");
-		return rc;
+		goto exit;
 	}
 
-	return 0;
+exit:
+	if (total_len > HID_OUTPUT_MAX_CMD_SIZE) {
+		kfree(cmd);
+	}
+	return rc;
 }
 
 static void cyttsp5_si_get_btn_data(struct cyttsp5 *ts)
@@ -828,6 +852,27 @@ static int cyttsp5_hid_output_resume_scanning(struct cyttsp5 *ts)
 	return 0;
 }
 
+static int
+cyttsp5_hid_output_verify_config_block_crc(struct cyttsp5 *ts, u8 ebid, u8 *status,
+					   u16 *calculated_crc, u16 *stored_crc)
+{
+	int rc;
+	u8 write_buf[] = { ebid };
+	rc = cyttsp5_hid_output_app_write_and_wait(
+		ts, HID_OUTPUT_VERIFY_CONFIG_BLOCK_CRC, write_buf,
+		ARRAY_SIZE(write_buf), CY_HID_OUTPUT_TIMEOUT_MS);
+	if (rc) {
+		dev_err(ts->dev, "%s: Failed to verify config block crc", __func__);
+		return rc;
+	}
+
+	*status = ts->response_buf[5];
+	*calculated_crc = get_unaligned_le16(ts->response_buf + 6);
+	*stored_crc = get_unaligned_le16(ts->response_buf + 8);
+
+	return 0;
+}
+
 static int cyttsp5_hid_output_get_config_row_size(struct cyttsp5 *ts,
 						  u16 *row_size)
 {
@@ -885,6 +930,62 @@ static int cyttsp5_hid_output_read_conf_block(struct cyttsp5 *ts,
 	return 0;
 }
 
+static int cyttsp5_hid_output_write_conf_block(struct cyttsp5 *ts,
+					      u16 row_number, u16 length,
+					      u8 ebid, const u8 *data)
+{
+	int ret;
+	u16 actual_write_len;
+	u16 crc;
+	u8 status, read_ebid;
+
+	int key_size = ARRAY_SIZE(cyttps5_security_key);
+	int write_buf_len = 2 + 2 + 1 + length + key_size + 2;
+	u8 *write_buf = kzalloc(write_buf_len, GFP_KERNEL);
+	if (!write_buf)
+		return -ENOMEM;
+
+
+	put_unaligned_le16(row_number, write_buf);
+	put_unaligned_le16(length, write_buf + 2);
+	write_buf[4] = ebid;
+	memcpy(write_buf + 5, data, length);
+	memcpy(write_buf + 5 + length, cyttps5_security_key,
+	       ARRAY_SIZE(cyttps5_security_key));
+	crc = crc_itu_t(0xFFFF, data, length);
+	put_unaligned_le16(crc, write_buf + 5 + length + key_size);
+
+	ret = cyttsp5_hid_output_app_write_and_wait(ts,
+						    HID_OUTPUT_WRITE_CONF_BLOCK,
+						    write_buf, write_buf_len,
+						    HID_OUTPUT_WRITE_CONF_BLOCK_TIMEOUT_MS);
+	if (ret) {
+		dev_err(ts->dev, "%s: cmd failed ret=%d", __func__, ret);
+		return ret;
+	}
+
+	status = ts->response_buf[5];
+	if (status) {
+		dev_err(ts->dev, "%s: response status=%d", __func__, status);
+		return -EINVAL;
+	}
+
+	read_ebid = ts->response_buf[6];
+	if (read_ebid != ebid) {
+		dev_err(ts->dev, "%s: non-matching EBIDs", __func__);
+		return -EPROTO;
+	}
+
+	actual_write_len = get_unaligned_le16(ts->response_buf + 7);
+	if (actual_write_len != length) {
+		dev_err(ts->dev,
+			"%s: wrong write size length=%d actual_write_len=%d",
+			__func__, length, actual_write_len);
+		return -EINVAL;
+	}
+	return 0;
+}
+
 static ssize_t cyttsp5_sysfs_dump_cydata(struct device *dev,
 				     struct device_attribute *attr, char *buf)
 {
@@ -907,6 +1008,8 @@ static ssize_t cyttsp5_sysfs_dump_config(struct device *dev,
 	rc = cyttsp5_hid_output_suspend_scanning(ts);
 	if (rc)
 		return rc;
+
+	spin_lock(&ts->exclusive_lock);
 
 	rc = cyttsp5_hid_output_read_conf_block(ts, 0, CY_DATA_ROW_SIZE,
 			CY_TCH_PARM_EBID, read_buf, &crc);
@@ -936,13 +1039,182 @@ static ssize_t cyttsp5_sysfs_dump_config(struct device *dev,
 		}
 	}
 resume_scanning:
+	spin_unlock(&ts->exclusive_lock);
 	cyttsp5_hid_output_resume_scanning(ts);
 
 	return bytes_written;
 }
 
+static int cyttsp5_verify_ttconfig(struct cyttsp5 *ts,
+				   const struct firmware *config,
+				   size_t *config_offset, size_t *config_length)
+{
+	struct cyttsp5_sysinfo *si = &ts->sysinfo;
+	int header_size;
+	u16 fw_ver_config;
+	u32 fw_revctrl_config;
+	u16 fw_ver_si;
+	u32 fw_revctrl_si;
+	u16 config_size;
+
+	if (!si) {
+		dev_err(ts->dev,
+			"%s: No firmware information found, device firmware may be corrupted",
+			__func__);
+		return -ENODEV;
+	}
+
+	if (config->size < 11) {
+		dev_err(ts->dev, "%s: config is too short", __func__);
+		return -EINVAL;
+	}
+
+	/*
+	 * We need 11 bytes for FW version control info and at
+	 * least 6 bytes in config (Length + Max Length + CRC)
+	 */
+	header_size = config->data[0] + 1;
+	if (header_size < 11 || header_size >= config->size - 6) {
+		dev_err(ts->dev, "%s: Invalid header size %d", __func__,
+			header_size);
+		return -EINVAL;
+	}
+
+	fw_ver_config = get_unaligned_be16(config->data + 1);
+	/* 4 middle bytes are not used */
+	fw_revctrl_config = get_unaligned_be32(config->data + 7);
+
+	fw_ver_si = get_unaligned_be16(si->cydata + 4);
+	fw_revctrl_si = get_unaligned_le32(si->cydata + 6);
+
+	/* FW versions should match */
+	if (fw_ver_config != fw_ver_si) {
+		dev_err(ts->dev,
+			"%s: Firmware version mismatch config=%u si=%u",
+			__func__, fw_ver_config, fw_ver_si);
+		return -EINVAL;
+	}
+
+	/* Firmware revision should match as well */
+	if (fw_revctrl_config != fw_revctrl_si) {
+		dev_err(ts->dev,
+			"%s: Firmware revision mismatch config=%u si=%u",
+			__func__, fw_revctrl_config, fw_revctrl_si);
+		return -EINVAL;
+	}
+
+	config_size = get_unaligned_le16(config->data + header_size);
+	if (config_size != config->size - header_size - 2) {
+		dev_err(ts->dev, "%s: Invalid config size", __func__);
+		return -EINVAL;
+	}
+	*config_offset = header_size;
+	*config_length = config_size;
+
+	return 0;
+}
+
+static int cyttsp5_update_config(struct device *dev)
+{
+	struct cyttsp5 *ts = dev_get_drvdata(dev);
+	const struct firmware *config;
+	int i, ret;
+	int row_count, remainder;
+	u8 ebid = CY_TCH_PARM_EBID;
+	u8 crc_status;
+	u16 calculated_crc, stored_crc;
+	size_t config_length;
+	size_t offset;
+
+	// 1. Load firmware
+	ret = request_firmware(&config, CY_FIRMWARE_CONFIG, dev);
+	if (ret) {
+		dev_err(dev, "Unable to load config firmware %s", CY_FIRMWARE_CONFIG);
+		return -EINVAL;
+	}
+
+	// 2. Validate firmware
+	ret = cyttsp5_verify_ttconfig(ts, config, &offset, &config_length);
+	if (ret) {
+		dev_err(dev, "Configuration validation failed");
+		return ret;
+	}
+
+	// 3. Runtime: get sync
+	pm_runtime_get_sync(dev);
+
+	spin_lock(&ts->exclusive_lock);
+
+	// 4. Suspend scanning
+	ret = cyttsp5_hid_output_suspend_scanning(ts);
+	if (ret) {
+		dev_err(dev, "Failed to suspend scanning ret=%d", ret);
+		return ret;
+	}
+
+	row_count = config_length / CY_DATA_ROW_SIZE;
+	remainder = config_length % CY_DATA_ROW_SIZE;
+
+	for (i = 0; i < row_count; ++i) {
+		ret = cyttsp5_hid_output_write_conf_block(
+			ts, i, CY_DATA_ROW_SIZE, ebid,
+			config->data + offset);
+		offset += CY_DATA_ROW_SIZE;
+		if (ret) {
+			dev_err(dev, "Failed to write row i=%d ret=%d", i, ret);
+			break;
+		}
+	}
+	if (!ret && remainder) {
+		ret = cyttsp5_hid_output_write_conf_block(
+			ts, row_count, remainder, ebid,
+			config->data + offset);
+		if (ret)
+			dev_err(dev, "Failed to write remainder row i=%d ret=%d", i, ret);
+	}
+
+	if (!ret)
+		dev_dbg(dev, "Wrote all %zu config bytes", config_length);
+
+	ret = cyttsp5_hid_output_verify_config_block_crc(ts, ebid, &crc_status, &calculated_crc, &stored_crc);
+	if (ret || crc_status)
+		dev_err(dev,
+			"%s: CRC failed ret=%d crc_status=%d calculated_crc=%d stored_crc=%d",
+			__func__, ret, crc_status, calculated_crc, stored_crc);
+	else
+		dev_dbg(dev, "%s: CRC pass", __func__);
+
+	ret = cyttsp5_hid_output_resume_scanning(ts);
+	if (ret) {
+		dev_err(dev, "Failed to resume scanning");
+		return ret;
+	}
+
+	spin_unlock(&ts->exclusive_lock);
+
+	// TODO: consider request_restart
+
+	pm_runtime_put_sync(dev);
+
+	return 0;
+}
+
+static ssize_t update_config_store(struct device *dev,
+				   struct device_attribute *attr,
+				   const char *buf, size_t len)
+{
+	int ret = cyttsp5_update_config(dev);
+	if (ret)
+		dev_err(dev, "Failed to update config ret=%d", ret);
+	else
+		dev_info(dev, "Updated config");
+
+	return len;
+}
+
 static DEVICE_ATTR(dump_config, S_IRUGO, cyttsp5_sysfs_dump_config, NULL);
 static DEVICE_ATTR(dump_cydata, S_IRUGO, cyttsp5_sysfs_dump_cydata, NULL);
+DEVICE_ATTR_WO(update_config);
 
 static irqreturn_t cyttsp5_handle_irq(int irq, void *handle)
 {
@@ -1067,6 +1339,7 @@ static int cyttsp5_startup(struct cyttsp5 *ts)
 static struct attribute *cyttsp5_attrs[] = {
 	&dev_attr_dump_config.attr,
 	&dev_attr_dump_cydata.attr,
+	&dev_attr_update_config.attr,
 	NULL
 };
 
@@ -1132,6 +1405,8 @@ static int cyttsp5_probe(struct device *dev, struct regmap *regmap, int irq,
 		dev_err(dev, "Error, failed to allocate input device\n");
 		return -ENODEV;
 	}
+
+	spin_lock_init(&ts->exclusive_lock);
 
 	ts->input->name = "cyttsp5";
 	scnprintf(ts->phys, sizeof(ts->phys), "%s/input0", dev_name(dev));
