@@ -190,3 +190,4 @@ initrd_base/.rooted.dgst
 
 *.pem
 quill-init
+alpine-chroot-install
