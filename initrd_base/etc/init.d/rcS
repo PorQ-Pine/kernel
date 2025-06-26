@@ -11,12 +11,4 @@ mount -t tmpfs tmpfs /tmp
 hostname pinenote
 ifconfig lo up
 
-read -t 5 -n 1 -s -r -p "(initrd) Hit any key to stop auto-boot ... " KEY
-echo
-
-if [ -z "${KEY}" ]; then
-	# We should execute the main Rust program at this point
-	:
-else
-	exit 0
-fi
+/etc/init.d/quill-init

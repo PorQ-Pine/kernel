@@ -189,3 +189,4 @@ initrd_base/.rooted
 initrd_base/.rooted.dgst
 
 *.pem
+quill-init
