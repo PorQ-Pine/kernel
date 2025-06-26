@@ -11,4 +11,4 @@ mount -t tmpfs tmpfs /tmp
 hostname pinenote
 ifconfig lo up
 
-/etc/init.d/quill-init
+RUST_LOG=info /etc/init.d/quill-init
