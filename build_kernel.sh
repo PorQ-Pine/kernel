@@ -11,7 +11,7 @@ umount_recursive() {
 # CONSTANTS #
 cd "$(dirname "$0")"
 RUSTFLAGS="-C target-feature=-crt-static"
-PKGS="busybox busybox-extras libxkbcommon eudev libinput libgcc musl mtdev libevdev openssl"
+PKGS="busybox busybox-extras libxkbcommon eudev libinput libgcc musl mtdev libevdev openssl dropbear dropbear-ssh dropbear-scp openssh-sftp-server"
 INITRD_DIR="${PWD}/initrd"
 ARCH="aarch64"
 
@@ -38,6 +38,7 @@ sudo chown -R "${USER}:${USER}" "${INITRD_DIR}"
 sudo chmod 555 "${INITRD_DIR}/bin/bbsuid"
 rm "${INITRD_DIR}/env.sh" "${INITRD_DIR}/destroy" "${INITRD_DIR}/enter-chroot" "${INITRD_DIR}/etc/motd"
 sed -i 's/Welcome.*/Welcome to Quill OS recovery/g' "${INITRD_DIR}/etc/issue"
+# find "${INITRD_DIR}" -type f -exec upx {} \;
 
 # KERNEL COMPILATION #
 [ -z "${THREADS}" ] && THREADS=1
