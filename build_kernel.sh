@@ -13,7 +13,7 @@ cd "$(dirname "$0")"
 ROOT_DIR="${PWD}"
 RUSTFLAGS="-C target-feature=-crt-static"
 PKGS="busybox busybox-extras libxkbcommon eudev libinput libgcc musl mtdev libevdev openssl dropbear dropbear-ssh dropbear-scp openssh-sftp-server"
-EXTRA_PKGS=(mesa-gbm python3 py3-numpy)
+EXTRA_PKGS=(python3 py3-numpy)
 INITRD_DIR="${PWD}/initrd"
 PKGS_DIR="${PWD}/pkgs"
 PKGS_ARCHIVE_DIR="${PKGS_DIR}/archive"
