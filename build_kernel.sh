@@ -10,9 +10,14 @@ umount_recursive() {
 
 # CONSTANTS #
 cd "$(dirname "$0")"
+ROOT_DIR="${PWD}"
 RUSTFLAGS="-C target-feature=-crt-static"
 PKGS="busybox busybox-extras libxkbcommon eudev libinput libgcc musl mtdev libevdev openssl dropbear dropbear-ssh dropbear-scp openssh-sftp-server"
+EXTRA_PKGS=(mesa-gbm python3 py3-numpy)
 INITRD_DIR="${PWD}/initrd"
+PKGS_DIR="${PWD}/pkgs"
+PKGS_ARCHIVE_DIR="${PKGS_DIR}/archive"
+PKGS_ARCHIVE="pkgs.sqsh"
 ARCH="aarch64"
 
 # CHECKS #
@@ -39,6 +44,15 @@ sudo chmod 555 "${INITRD_DIR}/bin/bbsuid"
 rm "${INITRD_DIR}/env.sh" "${INITRD_DIR}/destroy" "${INITRD_DIR}/enter-chroot" "${INITRD_DIR}/etc/motd"
 sed -i 's/Welcome.*/Welcome to Quill OS recovery/g' "${INITRD_DIR}/etc/issue"
 # find "${INITRD_DIR}" -type f -exec upx {} \;
+
+# EXTRA PACKAGES SETUP #
+APK_URI="$(cat alpine-chroot-install/alpine-chroot-install | sed -n '/: ${APK_TOOLS_URI/p' | awk -F '"' '{ print $2 }')"
+rm -rf "${PKGS_DIR}"
+mkdir -p "${PKGS_ARCHIVE_DIR}" && pushd "${PKGS_ARCHIVE_DIR}"
+wget "${APK_URI}" -O ../apk && chmod +x ../apk
+../apk fetch -R ${EXTRA_PKGS[@]}
+mksquashfs . "../${PKGS_ARCHIVE}" -no-compression && openssl dgst -sha256 -sign "${ROOT_DIR}/private.pem" -out "../${PKGS_ARCHIVE}.dgst" "../${PKGS_ARCHIVE}"
+popd
 
 # KERNEL COMPILATION #
 [ -z "${THREADS}" ] && THREADS=1
