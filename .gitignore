@@ -182,13 +182,14 @@ sphinx_*/
 # Rust analyzer configuration
 /rust-project.json
 
-initrd
-initrd_base/lib/modules
-initrd_base/.commit
-initrd_base/.rooted
-initrd_base/.rooted.dgst
+/initrd
+/initrd_base/lib/modules
+/initrd_base/.commit
+/initrd_base/.rooted
+/initrd_base/.rooted.dgst
+/initrd_base/etc/init.d/qinit
 
 *.pem
-quill-init
-alpine-chroot-install
-pkgs
+/quill-init
+/alpine-chroot-install
+/data
