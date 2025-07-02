@@ -12,7 +12,7 @@ umount_recursive() {
 cd "$(dirname "$0")"
 ROOT_DIR="${PWD}"
 RUSTFLAGS="-C target-feature=-crt-static"
-PKGS="busybox busybox-extras libxkbcommon eudev libinput libgcc musl mtdev libevdev openssl dropbear dropbear-ssh dropbear-scp openssh-sftp-server"
+PKGS="busybox busybox-extras libxkbcommon eudev libinput libgcc musl mtdev libevdev openssl dropbear dropbear-ssh dropbear-scp openssh-sftp-server fontconfig"
 EXTRA_PKGS=(python3 py3-numpy)
 INITRD_DIR="${PWD}/initrd"
 PKGS_DIR="${PWD}/pkgs"
