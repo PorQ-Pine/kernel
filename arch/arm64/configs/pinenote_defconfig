@@ -553,7 +553,7 @@ CONFIG_CC_HAVE_STACKPROTECTOR_SYSREG=y
 #
 # Boot options
 #
-CONFIG_CMDLINE="root=/dev/ram0 rootfstype=ramfs rdinit=/sbin/init ignore_loglevel rw rootwait earlycon console=tty0 console=ttyS2,1500000n8 fw_devlink=off loglevel=3 rd.udev.log_level=3 vt.global_cursor_default=0"
+CONFIG_CMDLINE="root=/dev/ram0 rootfstype=ramfs rdinit=/sbin/init ignore_loglevel rw rootwait earlycon console=ttyS2,1500000n8 fw_devlink=off loglevel=3 vt.global_cursor_default=0"
 # CONFIG_CMDLINE_FROM_BOOTLOADER is not set
 CONFIG_CMDLINE_FORCE=y
 CONFIG_EFI_STUB=y
@@ -4625,7 +4625,7 @@ CONFIG_FRAMEBUFFER_CONSOLE=y
 # CONFIG_FRAMEBUFFER_CONSOLE_LEGACY_ACCELERATION is not set
 CONFIG_FRAMEBUFFER_CONSOLE_DETECT_PRIMARY=y
 CONFIG_FRAMEBUFFER_CONSOLE_ROTATION=y
-CONFIG_FRAMEBUFFER_CONSOLE_DEFERRED_TAKEOVER=y
+# CONFIG_FRAMEBUFFER_CONSOLE_DEFERRED_TAKEOVER is not set
 # end of Console display driver support
 
 # CONFIG_LOGO is not set

@@ -27,7 +27,7 @@ ARCH="aarch64"
 
 # INIT PROGRAM COMPILATION #
 if [ "${INIT_DEBUG}" == 1 ]; then
-	pushd quill-init; env RUSTFLAGS="${RUSTFLAGS}" cargo build --release --features debug; popd
+	pushd quill-init; env RUSTFLAGS="${RUSTFLAGS}" cargo build --release --features "debug free_roam"; popd
 else
 	pushd quill-init; env RUSTFLAGS="${RUSTFLAGS}" cargo build --release; popd
 fi
@@ -58,7 +58,7 @@ popd
 [ -z "${THREADS}" ] && THREADS=1
 git rev-parse --short HEAD > initrd_base/.commit
 rm -rf initrd_base/lib
-make distclean
+[ -z "${DIRTY}" ] && make distclean
 make pinenote_defconfig
 sed -i 's/\(CONFIG_CMDLINE=".*\)\("\)/\1 '"$(cat public.pem | base64 | tr -d '\n')"'"/' .config
 make -j${THREADS}
