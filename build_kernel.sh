@@ -36,8 +36,6 @@ sign() {
 	RECOVERYFS_DIR="${DATA_DIR}/recoveryfs"
 	RECOVERYFS_ARCHIVE="${DATA_DIR}/recoveryfs.squashfs"
 	QUILL_INIT_DIR="quill-init"
-	INIT_DIR="${QUILL_INIT_DIR}/qinit"
-	RECOVERY_DIR="${QUILL_INIT_DIR}/qrecovery"
 
 	INITRD_PKGS="busybox busybox-extras libxkbcommon eudev udev-init-scripts libinput libgcc musl mtdev libevdev openssl dropbear dropbear-ssh dropbear-scp openssh-sftp-server fontconfig openrc"
 	RECOVERYFS_PKGS="${INITRD_PKGS} python3 py3-numpy mesa-gbm"
@@ -50,10 +48,9 @@ sign() {
 #### END CHECKS ####
 
 #### BEGIN INIT PROGRAMS COMPILATION ####
-	pushd "${INIT_DIR}" && env RUSTFLAGS="${RUSTFLAGS}" cargo build --release --features "${INIT_FEATURES}" && popd
-	pushd "${RECOVERY_DIR}" && env RUSTFLAGS="${RUSTFLAGS}" cargo build --release --features "${INIT_FEATURES}" && popd
+	pushd "${QUILL_INIT_DIR}" && env RUSTFLAGS="${RUSTFLAGS}" cargo build --release --features "${QUILL_INIT_FEATURES}" && popd
 
-	cp "${INIT_DIR}/target/release/qinit" "${INITRD_BASE_DIR}/etc/init.d/qinit"
+	cp "${QUILL_INIT_DIR}/target/release/qinit" "${INITRD_BASE_DIR}/etc/init.d/qinit"
 #### END INIT PROGRAMS COMPILATION ####
 
 #### BEGIN ALPINE ROOTFS SETUP ####
@@ -63,7 +60,7 @@ sign() {
 #### BEGIN RECOVERYFS SETUP ####
 	setup_alpine_chroot "${RECOVERYFS_DIR}" "${RECOVERYFS_PKGS}" "${ARCH}"
 	sudo chown -R "${USER}:${USER}" "${DATA_DIR}"
-	cp "${RECOVERY_DIR}/target/release/qrecovery" "${RECOVERYFS_DIR}/sbin/qrecovery"
+	cp "${QUILL_INIT_DIR}/target/release/qrecovery" "${RECOVERYFS_DIR}/sbin/qrecovery"
 	mkdir -p "${RECOVERYFS_DIR}/usr/share/fonts" && cp -rv "${INITRD_BASE_DIR}/usr/share/fonts" "${RECOVERYFS_DIR}/usr/share"
 	rm -f "${RECOVERYFS_ARCHIVE}"
 	mksquashfs "${RECOVERYFS_DIR}" "${RECOVERYFS_ARCHIVE}" -comp zstd -b 32768 -Xcompression-level 22 && sign "${RECOVERYFS_ARCHIVE}"
