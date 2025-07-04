@@ -212,7 +212,6 @@ CONFIG_CHECKPOINT_RESTORE=y
 # CONFIG_RELAY is not set
 CONFIG_BLK_DEV_INITRD=y
 CONFIG_INITRAMFS_SOURCE="./devnodes.txt ./initrd/ ./initrd_base/"
-# CONFIG_INITRAMFS_FORCE is not set
 CONFIG_INITRAMFS_ROOT_UID=0
 CONFIG_INITRAMFS_ROOT_GID=0
 # CONFIG_RD_GZIP is not set
@@ -554,8 +553,8 @@ CONFIG_CC_HAVE_STACKPROTECTOR_SYSREG=y
 # Boot options
 #
 CONFIG_CMDLINE="root=/dev/ram0 rootfstype=ramfs rdinit=/sbin/init ignore_loglevel rw rootwait earlycon console=ttyS2,1500000n8 fw_devlink=off loglevel=3 vt.global_cursor_default=0"
-# CONFIG_CMDLINE_FROM_BOOTLOADER is not set
-CONFIG_CMDLINE_FORCE=y
+CONFIG_CMDLINE_FROM_BOOTLOADER=y
+# CONFIG_CMDLINE_FORCE is not set
 CONFIG_EFI_STUB=y
 CONFIG_EFI=y
 # CONFIG_COMPRESSED_INSTALL is not set
