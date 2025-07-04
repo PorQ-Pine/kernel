@@ -188,8 +188,9 @@ sphinx_*/
 /initrd_base/.rooted
 /initrd_base/.rooted.dgst
 /initrd_base/etc/init.d/qinit
+/initrd_base/opt/key/*
 
-*.pem
+/*.pem
 /quill-init
 /alpine-chroot-install
 /data

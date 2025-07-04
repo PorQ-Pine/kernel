@@ -32,6 +32,7 @@ sign() {
 	ROOT_DIR="${PWD}"
 	INITRD_DIR="${ROOT_DIR}/initrd"
 	INITRD_BASE_DIR="${ROOT_DIR}/initrd_base"
+	PUBKEY_DIR="${INITRD_BASE_DIR}/opt/key"
 	DATA_DIR="${ROOT_DIR}/data"
 	RECOVERYFS_DIR="${DATA_DIR}/recoveryfs"
 	RECOVERYFS_ARCHIVE="${DATA_DIR}/recoveryfs.squashfs"
@@ -55,6 +56,8 @@ sign() {
 
 #### BEGIN ALPINE ROOTFS SETUP ####
 	setup_alpine_chroot "${INITRD_DIR}" "${INITRD_PKGS}" "${ARCH}"
+	mkdir -p "${PUBKEY_DIR}"
+	cp "${ROOT_DIR}/public.pem" "${PUBKEY_DIR}"
 #### END ALPINE ROOTFS SETUP ####
 
 #### BEGIN RECOVERYFS SETUP ####
@@ -72,7 +75,6 @@ sign() {
 	rm -rf initrd_base/lib
 	[ -z "${DIRTY}" ] && make distclean
 	make pinenote_defconfig
-	sed -i 's/\(CONFIG_CMDLINE=".*\)\("\)/\1 '"$(cat public.pem | base64 | tr -d '\n')"'"/' .config
 	make -j${THREADS}
 	make modules_install INSTALL_MOD_PATH="$PWD/initrd_base/"
 	make # This is not a typo
