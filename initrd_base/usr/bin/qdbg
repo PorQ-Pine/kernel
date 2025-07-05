@@ -1,0 +1,15 @@
+#!/bin/sh
+
+FLAGS_DIR="/data/boot/flags"
+SERVER="$(cat ""${FLAGS_DIR}/QDBG_SERVER"")"
+BINARY="${1}"
+BINARY_DIR="/tmp"
+BINARY_PATH="${BINARY_DIR}/${BINARY}"
+
+if [ "${BINARY}" == "qinit" ]; then
+	SPECIFIC_ENV="RUST_LOG=info SLINT_KMS_ROTATION=270"
+fi
+
+wget -O "${BINARY_DIR}/${1}" "${SERVER}/${BINARY}"
+chmod +x "${BINARY_PATH}"
+env ${SPECIFIC_ENV} "${BINARY_PATH}"
