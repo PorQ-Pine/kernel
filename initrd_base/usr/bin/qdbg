@@ -11,5 +11,6 @@ if [ "${BINARY}" == "qinit" ]; then
 fi
 
 wget -O "${BINARY_DIR}/${1}" "${SERVER}/${BINARY}"
+killall -q "${BINARY}"
 chmod +x "${BINARY_PATH}"
 env ${SPECIFIC_ENV} "${BINARY_PATH}"

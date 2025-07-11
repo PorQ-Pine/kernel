@@ -34,12 +34,12 @@ sign() {
 	INITRD_BASE_DIR="${ROOT_DIR}/initrd_base"
 	PUBKEY_DIR="${INITRD_BASE_DIR}/opt/key"
 	DATA_DIR="${ROOT_DIR}/data"
-	RECOVERYFS_DIR="${DATA_DIR}/recoveryfs"
-	RECOVERYFS_ARCHIVE="${DATA_DIR}/recoveryfs.squashfs"
+	#RECOVERYFS_DIR="${DATA_DIR}/recoveryfs"
+	#RECOVERYFS_ARCHIVE="${DATA_DIR}/recoveryfs.squashfs"
 	QUILL_INIT_DIR="quill-init"
 
 	INITRD_PKGS="busybox busybox-extras libxkbcommon eudev udev-init-scripts libinput libgcc musl mtdev libevdev openssl dropbear dropbear-ssh dropbear-scp openssh-sftp-server fontconfig openrc"
-	RECOVERYFS_PKGS="${INITRD_PKGS} python3 py3-numpy mesa-gbm"
+	#RECOVERYFS_PKGS="${INITRD_PKGS} python3 py3-numpy mesa-gbm"
 #### END CONSTANTS ####
 
 #### BEGIN CHECKS ####
@@ -61,12 +61,12 @@ sign() {
 #### END ALPINE ROOTFS SETUP ####
 
 #### BEGIN RECOVERYFS SETUP ####
-	setup_alpine_chroot "${RECOVERYFS_DIR}" "${RECOVERYFS_PKGS}" "${ARCH}"
-	sudo chown -R "${USER}:${USER}" "${DATA_DIR}"
-	cp "${QUILL_INIT_DIR}/target/release/qrecovery" "${RECOVERYFS_DIR}/sbin/qrecovery"
-	mkdir -p "${RECOVERYFS_DIR}/usr/share/fonts" && cp -rv "${INITRD_BASE_DIR}/usr/share/fonts" "${RECOVERYFS_DIR}/usr/share"
-	rm -f "${RECOVERYFS_ARCHIVE}"
-	mksquashfs "${RECOVERYFS_DIR}" "${RECOVERYFS_ARCHIVE}" -comp zstd -b 32768 -Xcompression-level 22 && sign "${RECOVERYFS_ARCHIVE}"
+#	setup_alpine_chroot "${RECOVERYFS_DIR}" "${RECOVERYFS_PKGS}" "${ARCH}"
+#	sudo chown -R "${USER}:${USER}" "${DATA_DIR}"
+#	cp "${QUILL_INIT_DIR}/target/release/qrecovery" "${RECOVERYFS_DIR}/sbin/qrecovery"
+#	mkdir -p "${RECOVERYFS_DIR}/usr/share/fonts" && cp -rv "${INITRD_BASE_DIR}/usr/share/fonts" "${RECOVERYFS_DIR}/usr/share"
+#	rm -f "${RECOVERYFS_ARCHIVE}"
+#	mksquashfs "${RECOVERYFS_DIR}" "${RECOVERYFS_ARCHIVE}" -comp zstd -b 32768 -Xcompression-level 22 && sign "${RECOVERYFS_ARCHIVE}"
 #### END RECOVERYFS SETUP ####
 
 #### BEGIN KERNEL COMPILATION ####

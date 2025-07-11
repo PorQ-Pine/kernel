@@ -12,3 +12,6 @@ hostname pinenote
 ifconfig lo up
 
 RUST_LOG=info SLINT_KMS_ROTATION=270 /etc/init.d/qinit
+if [ ${?} == 255 ]; then
+	poweroff
+fi
