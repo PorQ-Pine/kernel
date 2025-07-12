@@ -38,7 +38,7 @@ sign() {
 	#RECOVERYFS_ARCHIVE="${DATA_DIR}/recoveryfs.squashfs"
 	QUILL_INIT_DIR="quill-init"
 
-	INITRD_PKGS="busybox busybox-extras libxkbcommon eudev udev-init-scripts libinput libgcc musl mtdev libevdev openssl dropbear dropbear-ssh dropbear-scp openssh-sftp-server fontconfig openrc"
+	INITRD_PKGS="busybox busybox-extras libxkbcommon eudev udev-init-scripts libinput libgcc musl mtdev libevdev openssl dropbear dropbear-ssh dropbear-scp openssh-sftp-server fontconfig openrc unionfs-fuse"
 	#RECOVERYFS_PKGS="${INITRD_PKGS} python3 py3-numpy mesa-gbm"
 #### END CONSTANTS ####
 
