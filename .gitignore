@@ -189,6 +189,7 @@ sphinx_*/
 /initrd_base/.rooted.dgst
 /initrd_base/etc/init.d/qinit
 /initrd_base/opt/key/*
+/initrd_base/sbin/init
 
 /*.pem
 /quill-init

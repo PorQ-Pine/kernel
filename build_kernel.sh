@@ -38,7 +38,7 @@ sign() {
 	#RECOVERYFS_ARCHIVE="${DATA_DIR}/recoveryfs.squashfs"
 	QUILL_INIT_DIR="quill-init"
 
-	INITRD_PKGS="busybox busybox-extras libxkbcommon eudev udev-init-scripts libinput libgcc musl mtdev libevdev openssl dropbear dropbear-ssh dropbear-scp openssh-sftp-server fontconfig openrc unionfs-fuse"
+	INITRD_PKGS="busybox busybox-extras libxkbcommon eudev udev-init-scripts libinput libgcc musl mtdev libevdev openssl dropbear dropbear-ssh dropbear-scp openssh-sftp-server fontconfig openrc fuse-overlayfs"
 	#RECOVERYFS_PKGS="${INITRD_PKGS} python3 py3-numpy mesa-gbm"
 #### END CONSTANTS ####
 
@@ -50,8 +50,9 @@ sign() {
 
 #### BEGIN INIT PROGRAMS COMPILATION ####
 	pushd "${QUILL_INIT_DIR}" && env RUSTFLAGS="${RUSTFLAGS}" cargo build --release --features "${QUILL_INIT_FEATURES}" && popd
-
 	cp "${QUILL_INIT_DIR}/target/release/qinit" "${INITRD_BASE_DIR}/etc/init.d/qinit"
+	pushd "${QUILL_INIT_DIR}" && env RUSTFLAGS="${RUSTFLAGS}" cargo build --release --features "init_wrapper" && popd
+	cp "${QUILL_INIT_DIR}/target/release/qinit" "${INITRD_BASE_DIR}/sbin/init"
 #### END INIT PROGRAMS COMPILATION ####
 
 #### BEGIN ALPINE ROOTFS SETUP ####
