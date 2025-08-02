@@ -16,7 +16,7 @@ setup_alpine_chroot() {
 	umount_recursive "${1}"
 	sudo chown -R "${USER}:${USER}" "${1}"
 	sudo chmod 555 "${1}/bin/bbsuid"
-	rm "${1}/env.sh" "${1}/destroy" "${1}/enter-chroot" "${1}/etc/motd"
+	rm "${1}/env.sh" "${1}/destroy" "${1}/enter-chroot" "${1}/etc/motd" "${1}/etc/resolv.conf"
 	sed -i 's/Welcome.*/Welcome to Quill OS recovery/g' "${1}/etc/issue"
 }
 
@@ -38,7 +38,7 @@ sign() {
 	#RECOVERYFS_ARCHIVE="${DATA_DIR}/recoveryfs.squashfs"
 	QUILL_INIT_DIR="quill-init"
 
-	INITRD_PKGS="busybox busybox-extras libxkbcommon eudev udev-init-scripts libinput libgcc musl mtdev libevdev openssl dropbear dropbear-ssh dropbear-scp openssh-sftp-server fontconfig openrc fuse-overlayfs xz"
+	INITRD_PKGS="busybox busybox-extras libxkbcommon eudev udev-init-scripts libinput libgcc musl mtdev libevdev openssl dropbear dropbear-ssh dropbear-scp openssh-sftp-server fontconfig openrc fuse-overlayfs xz iwd openresolv"
 	#RECOVERYFS_PKGS="${INITRD_PKGS} python3 py3-numpy mesa-gbm"
 #### END CONSTANTS ####
 
