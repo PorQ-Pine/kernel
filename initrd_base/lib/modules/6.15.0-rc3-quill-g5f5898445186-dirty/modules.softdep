@@ -1,3 +1,0 @@
-# Soft dependencies extracted from modules themselves.
-softdep xts pre: ecb
-softdep panfrost pre: governor_simpleondemand
