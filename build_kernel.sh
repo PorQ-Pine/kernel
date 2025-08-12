@@ -30,7 +30,7 @@ sign() {
 	ARCH="aarch64"
 
 	ROOT_DIR="${PWD}"
-	INITRD_DIR="$(realpath ""${ROOT_DIR}/../initrd/initrd"")"
+	INITRD_DIR="$(realpath ""${ROOT_DIR}/../initrd/initrd_alpine"")"
 	INITRD_BASE_DIR="${ROOT_DIR}/../initrd/initrd_base"
 	PUBKEY_DIR="${INITRD_BASE_DIR}/opt/key"
 	DATA_DIR="${ROOT_DIR}/data"
