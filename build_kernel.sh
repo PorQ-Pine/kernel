@@ -30,8 +30,8 @@ sign() {
 	ARCH="aarch64"
 
 	ROOT_DIR="${PWD}"
-	INITRD_DIR="$(realpath ""${ROOT_DIR}/../initrd"")"
-	INITRD_BASE_DIR="${ROOT_DIR}/initrd_base"
+	INITRD_DIR="$(realpath ""${ROOT_DIR}/../initrd/initrd"")"
+	INITRD_BASE_DIR="${ROOT_DIR}/../initrd/initrd_base"
 	PUBKEY_DIR="${INITRD_BASE_DIR}/opt/key"
 	DATA_DIR="${ROOT_DIR}/data"
 	#RECOVERYFS_DIR="${DATA_DIR}/recoveryfs"
@@ -72,11 +72,11 @@ sign() {
 
 #### BEGIN KERNEL COMPILATION ####
 	[ -z "${THREADS}" ] && THREADS=1
-	git rev-parse --short HEAD > initrd_base/.commit
-	rm -rf initrd_base/lib
+	git rev-parse --short HEAD > "${INITRD_BASE_DIR}/.commit"
+	rm -rf "${INITRD_BASE_DIR}/lib/modules"
 	[ -z "${DIRTY}" ] && make distclean
 	make pinenote_defconfig
 	make -j${THREADS}
-	make modules_install INSTALL_MOD_PATH="$PWD/initrd_base/"
+	make modules_install INSTALL_MOD_PATH="${INITRD_BASE_DIR}"
 	make # This is not a typo
 #### END KERNEL COMPILATION ####

@@ -1,0 +1,6 @@
+# Device nodes to trigger on-demand module loading.
+tun net/tun c10:200
+uinput uinput c10:223
+uhid uhid c10:239
+snd_timer snd/timer c116:33
+rfkill rfkill c10:242
