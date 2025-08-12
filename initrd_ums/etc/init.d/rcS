@@ -1,0 +1,16 @@
+#!/bin/sh
+
+mkdir -p /dev /proc /sys
+mount -t devtmpfs devtmpfs /dev
+mount -t proc proc /proc
+mount -t sysfs sysfs /sys
+
+echo "PineNote USB mass storage kernel booting"
+
+while ! (cat /sys/class/power_supply/rk817-charger/online | grep -q 1); do
+	echo "Waiting for USB to be plugged in"
+	sleep 0.1
+done
+
+modprobe phy-rockchip-inno-usb2
+modprobe g_mass_storage file=/dev/mmcblk0 removable=y
