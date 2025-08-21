@@ -17,6 +17,7 @@ setup_alpine_chroot() {
 	sudo chown -R "${USER}:${USER}" "${1}"
 	sudo chmod 555 "${1}/bin/bbsuid"
 	rm "${1}/env.sh" "${1}/destroy" "${1}/enter-chroot" "${1}/etc/motd" "${1}/etc/resolv.conf"
+	rm -rf "${1}/var/cache"
 	sed -i 's/Welcome.*/Welcome to Quill OS recovery/g' "${1}/etc/issue"
 }
 
