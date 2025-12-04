@@ -288,10 +288,6 @@ static int dithering_method = 2;
 module_param(dithering_method, int, S_IRUGO|S_IWUSR);
 MODULE_PARM_DESC(dithering_method, "Dithering method, 0-2");
 
-static int bw_threshold = 7;
-module_param(bw_threshold, int, S_IRUGO|S_IWUSR);
-MODULE_PARM_DESC(bw_threshold, "black and white threshold");
-
 static int y2_dt_thresholds = 0x070f16;
 module_param(y2_dt_thresholds, int, S_IRUGO|S_IWUSR);
 MODULE_PARM_DESC(y2_dt_thresholds, "int whose lowest three bytes indicate thresholds when dithering");
@@ -2283,8 +2279,6 @@ static int rockchip_ebc_probe(struct platform_device *pdev)
 	ebc->pixel_pitch = width;
 	ebc->height = height;
 	ebc->screen_rect = DRM_RECT_INIT(0, 0, width, height);
-
-	ebc->y4_threshold_y1 = bw_threshold;
 
 	switch (dithering_method) {
 	case DITHERING_BAYER:

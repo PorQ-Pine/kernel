@@ -13,6 +13,10 @@
 
 #include <asm/neon-intrinsics.h>
 
+u8 y4_threshold_y1 = 7;
+module_param(y4_threshold_y1, byte, S_IRUGO|S_IWUSR);
+MODULE_PARM_DESC(y4_threshold_y1, "black and white threshold");
+
 #define NEON_PR_INFO(_q8_name)                                          \
 	{                                                               \
 		vst1q_u8(u8_tmp, (_q8_name));                           \
@@ -787,7 +791,7 @@ void rockchip_ebc_blit_fb_rgb565_y4_hints_neon(const struct rockchip_ebc *ebc,
 	uint8x16_t q8_thresholds_y2_table = vld1q_u8((u8 *)ebc->lut_y2_y4);
 	uint8x16x2_t q8_thresholds_y2_dither_table =
 		vld2q_u8((u8 *)ebc->lut_y2_y4_dithered);
-	uint8x16_t q8_threshold_y1 = vdupq_n_u8(ebc->y4_threshold_y1);
+	uint8x16_t q8_threshold_y1 = vdupq_n_u8(y4_threshold_y1);
 
 	const u8 *dithering_texture = ebc->dithering_texture;
 	u8 dithering_texture_size_hint = ebc->dithering_texture_size_hint;
@@ -968,7 +972,7 @@ void rockchip_ebc_blit_fb_xrgb8888_y4_hints_neon(
 	uint8x16_t q8_thresholds_y2_table = vld1q_u8((u8 *)ebc->lut_y2_y4);
 	uint8x16x2_t q8_thresholds_y2_dither_table =
 		vld2q_u8((u8 *)ebc->lut_y2_y4_dithered);
-	uint8x16_t q8_threshold_y1 = vdupq_n_u8(ebc->y4_threshold_y1);
+	uint8x16_t q8_threshold_y1 = vdupq_n_u8(y4_threshold_y1);
 
 	const u8 *dithering_texture = ebc->dithering_texture;
 	u8 dithering_texture_size_hint = ebc->dithering_texture_size_hint;
@@ -1129,7 +1133,7 @@ void rockchip_ebc_blit_fb_r8_y4_hints_neon(const struct rockchip_ebc *ebc,
 	uint8x16_t q8_thresholds_y2_table = vld1q_u8((u8 *)ebc->lut_y2_y4);
 	uint8x16x2_t q8_thresholds_y2_dither_table =
 		vld2q_u8((u8 *)ebc->lut_y2_y4_dithered);
-	uint8x16_t q8_threshold_y1 = vdupq_n_u8(ebc->y4_threshold_y1);
+	uint8x16_t q8_threshold_y1 = vdupq_n_u8(y4_threshold_y1);
 
 	const u8 *dithering_texture = ebc->dithering_texture;
 	u8 dithering_texture_size_hint = ebc->dithering_texture_size_hint;
