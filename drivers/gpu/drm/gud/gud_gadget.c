@@ -283,12 +283,12 @@ static int gud_gadget_req_set_state_check(struct gud_gadget *gdg, unsigned int i
 	connector = gdg->connectors[req->connector].connector;
 
 	if (gdg->buffer_check) {
-		drm_client_framebuffer_delete(gdg->buffer_check);
+		drm_client_buffer_delete(gdg->buffer_check);
 		gdg->buffer_check = NULL;
 	}
 
 	if (!gud_gadget_check_buffer(gdg, gdg->buffer, &mode, format)) {
-		buffer = drm_client_framebuffer_create(client, mode.hdisplay, mode.vdisplay,
+		buffer = drm_client_buffer_create_dumb(client, mode.hdisplay, mode.vdisplay,
 						       format);
 		if (IS_ERR(buffer))
 			return PTR_ERR(buffer);
@@ -364,7 +364,7 @@ static int gud_gadget_req_set_state_commit(struct gud_gadget *gdg, unsigned int 
 		return ret;
 
 	if (gdg->buffer_check) {
-		drm_client_framebuffer_delete(gdg->buffer);
+		drm_client_buffer_delete(gdg->buffer);
 		gdg->buffer = gdg->buffer_check;
 		gdg->buffer_check = NULL;
 	}
@@ -382,9 +382,9 @@ static void gud_gadget_flush_worker(struct work_struct *work)
 	struct drm_client_buffer *buffer = gdg->buffer ? gdg->buffer : gdg->buffer_check;
 	int ret;
 
-	ret = drm_client_framebuffer_flush(buffer, &gdg->flush_rect);
+	ret = drm_client_buffer_flush(buffer, &gdg->flush_rect);
 	if (ret)
-		pr_debug("%s: drm_client_framebuffer_flush: error=%d\n", __func__, ret);
+		pr_debug("%s: drm_client_buffer_flush: error=%d\n", __func__, ret);
 }
 
 static size_t gud_gadget_write_buffer_memcpy(struct drm_client_buffer *buffer,
@@ -565,8 +565,8 @@ EXPORT_SYMBOL(gud_gadget_req_set_buffer);
 
 static void gud_gadget_delete_buffers(struct gud_gadget *gdg)
 {
-	drm_client_framebuffer_delete(gdg->buffer_check);
-	drm_client_framebuffer_delete(gdg->buffer);
+	drm_client_buffer_delete(gdg->buffer_check);
+	drm_client_buffer_delete(gdg->buffer);
 	gdg->buffer_check = NULL;
 	gdg->buffer = NULL;
 }
