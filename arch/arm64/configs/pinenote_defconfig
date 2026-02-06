@@ -6160,7 +6160,7 @@ CONFIG_FRAME_POINTER=y
 # Generic Kernel Debugging Instruments
 #
 # CONFIG_MAGIC_SYSRQ is not set
-# CONFIG_DEBUG_FS is not set
+CONFIG_DEBUG_FS=y
 CONFIG_HAVE_ARCH_KGDB=y
 # CONFIG_KGDB is not set
 CONFIG_ARCH_HAS_UBSAN=y
