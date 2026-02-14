@@ -1,0 +1,13 @@
+What:		/config/usb-gadget/gadget/functions/gud.name
+Date:		Dec 2020
+KernelVersion:	5.10
+Description:
+		The attributes:
+
+		drm_dev - DRM device number
+		backlight_dev - Backlight device name (optional)
+				The backlight brightness scale should be
+				perceptual not linear.
+		compression - 8-bit mask of compressions to include.
+		formats - Byte string of GUD_PIXEL_FORMAT_* values to include.
+		connectors - 32-bit mask of connectors to include.

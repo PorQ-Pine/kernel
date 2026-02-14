@@ -56,3 +56,5 @@ usb_f_printer-y			:= f_printer.o
 obj-$(CONFIG_USB_F_PRINTER)	+= usb_f_printer.o
 usb_f_tcm-y			:= f_tcm.o
 obj-$(CONFIG_USB_F_TCM)		+= usb_f_tcm.o
+usb_f_gud-y			:= f_gud.o
+obj-$(CONFIG_USB_F_GUD)		+= usb_f_gud.o
