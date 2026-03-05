@@ -23,6 +23,7 @@
 #include "xe_map.h"
 #include "xe_mmio.h"
 #include "xe_pm.h"
+#include "xe_tile.h"
 
 /*
  * GSC proxy:
@@ -69,6 +70,17 @@ bool xe_gsc_proxy_init_done(struct xe_gsc *gsc)
 
 	return REG_FIELD_GET(HECI1_FWSTS1_CURRENT_STATE, fwsts1) ==
 	       HECI1_FWSTS1_PROXY_STATE_NORMAL;
+}
+
+int xe_gsc_wait_for_proxy_init_done(struct xe_gsc *gsc)
+{
+	struct xe_gt *gt = gsc_to_gt(gsc);
+
+	/* Proxy init can take up to 500ms, so wait double that for safety */
+	return xe_mmio_wait32(&gt->mmio, HECI_FWSTS1(MTL_GSC_HECI1_BASE),
+			      HECI1_FWSTS1_CURRENT_STATE,
+			      HECI1_FWSTS1_PROXY_STATE_NORMAL,
+			      USEC_PER_SEC, NULL, false);
 }
 
 static void __gsc_proxy_irq_rmw(struct xe_gsc *gsc, u32 clr, u32 set)
@@ -472,7 +484,7 @@ int xe_gsc_proxy_init(struct xe_gsc *gsc)
 	}
 
 	/* no multi-tile devices with this feature yet */
-	if (tile->id > 0) {
+	if (!xe_tile_is_root(tile)) {
 		xe_gt_err(gt, "unexpected GSC proxy init on tile %u\n", tile->id);
 		return -EINVAL;
 	}

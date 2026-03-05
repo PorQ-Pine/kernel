@@ -22,7 +22,7 @@
 #include <linux/pci.h>
 #include <linux/pm_runtime.h>
 
-#include <asm/amd_node.h>
+#include <asm/amd/node.h>
 
 #include "amd.h"
 #include "../mach-config.h"
@@ -147,7 +147,7 @@ static int rembrandt_audio_probe(struct platform_device *pdev)
 {
 	struct device *dev = &pdev->dev;
 	struct acp_chip_info *chip;
-	u32 ret;
+	int ret;
 
 	chip = dev_get_platdata(&pdev->dev);
 	if (!chip || !chip->base) {
@@ -199,7 +199,7 @@ static void rembrandt_audio_remove(struct platform_device *pdev)
 
 static int rmb_pcm_resume(struct device *dev)
 {
-	struct acp_chip_info *chip = dev_get_platdata(dev);
+	struct acp_chip_info *chip = dev_get_drvdata(dev->parent);
 	struct acp_stream *stream;
 	struct snd_pcm_substream *substream;
 	snd_pcm_uframes_t buf_in_frames;

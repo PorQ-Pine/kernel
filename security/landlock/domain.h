@@ -97,7 +97,7 @@ struct landlock_hierarchy {
 	 */
 	atomic64_t num_denials;
 	/**
-	 * @id: Landlock domain ID, sets once at domain creation time.
+	 * @id: Landlock domain ID, set once at domain creation time.
 	 */
 	u64 id;
 	/**
@@ -130,7 +130,7 @@ int landlock_init_hierarchy_log(struct landlock_hierarchy *const hierarchy);
 static inline void
 landlock_free_hierarchy_details(struct landlock_hierarchy *const hierarchy)
 {
-	if (WARN_ON_ONCE(!hierarchy || !hierarchy->details))
+	if (!hierarchy || !hierarchy->details)
 		return;
 
 	put_pid(hierarchy->details->pid);

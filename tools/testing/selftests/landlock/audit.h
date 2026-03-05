@@ -20,12 +20,10 @@
 #include <sys/time.h>
 #include <unistd.h>
 
+#include "kselftest.h"
+
 #ifndef ARRAY_SIZE
 #define ARRAY_SIZE(arr) (sizeof(arr) / sizeof((arr)[0]))
-#endif
-
-#ifndef __maybe_unused
-#define __maybe_unused __attribute__((__unused__))
 #endif
 
 #define REGEX_LANDLOCK_PREFIX "^audit([0-9.:]\\+): domain=\\([0-9a-f]\\+\\)"
@@ -300,15 +298,22 @@ out:
 	return err;
 }
 
-static int __maybe_unused matches_log_domain_allocated(int audit_fd,
+static int __maybe_unused matches_log_domain_allocated(int audit_fd, pid_t pid,
 						       __u64 *domain_id)
 {
-	return audit_match_record(
-		audit_fd, AUDIT_LANDLOCK_DOMAIN,
-		REGEX_LANDLOCK_PREFIX
-		" status=allocated mode=enforcing pid=[0-9]\\+ uid=[0-9]\\+"
-		" exe=\"[^\"]\\+\" comm=\".*_test\"$",
-		domain_id);
+	static const char log_template[] = REGEX_LANDLOCK_PREFIX
+		" status=allocated mode=enforcing pid=%d uid=[0-9]\\+"
+		" exe=\"[^\"]\\+\" comm=\".*_test\"$";
+	char log_match[sizeof(log_template) + 10];
+	int log_match_len;
+
+	log_match_len =
+		snprintf(log_match, sizeof(log_match), log_template, pid);
+	if (log_match_len > sizeof(log_match))
+		return -E2BIG;
+
+	return audit_match_record(audit_fd, AUDIT_LANDLOCK_DOMAIN, log_match,
+				  domain_id);
 }
 
 static int __maybe_unused matches_log_domain_deallocated(
@@ -396,11 +401,12 @@ static int audit_init_filter_exe(struct audit_filter *filter, const char *path)
 	/* It is assume that there is not already filtering rules. */
 	filter->record_type = AUDIT_EXE;
 	if (!path) {
-		filter->exe_len = readlink("/proc/self/exe", filter->exe,
-					   sizeof(filter->exe) - 1);
-		if (filter->exe_len < 0)
+		int ret = readlink("/proc/self/exe", filter->exe,
+				   sizeof(filter->exe) - 1);
+		if (ret < 0)
 			return -errno;
 
+		filter->exe_len = ret;
 		return 0;
 	}
 
