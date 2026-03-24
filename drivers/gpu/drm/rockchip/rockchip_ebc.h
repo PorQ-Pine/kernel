@@ -112,7 +112,6 @@ struct rockchip_ebc {
 	u32				pixel_pitch;
 	u32				height;
 	// Dithering / thresholding information
-	u8				y4_threshold_y1;
 	aligned_u64			lut_y2_y4[2];
 	aligned_u64			lut_y2_y4_dithered[4];
 	const u8			*dithering_texture;
