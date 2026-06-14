@@ -12,7 +12,7 @@
 
 #include <asm/insn-def.h>
 
-#ifndef __ASSEMBLY__
+#ifndef __ASSEMBLER__
 
 enum aarch64_insn_hint_cr_op {
 	AARCH64_INSN_HINT_NOP	= 0x0 << 5,
@@ -706,6 +706,7 @@ u32 aarch64_insn_gen_cas(enum aarch64_insn_register result,
 }
 #endif
 u32 aarch64_insn_gen_dmb(enum aarch64_insn_mb_type type);
+u32 aarch64_insn_gen_dsb(enum aarch64_insn_mb_type type);
 u32 aarch64_insn_gen_mrs(enum aarch64_insn_register result,
 			 enum aarch64_insn_system_register sysreg);
 
@@ -729,6 +730,6 @@ u32 aarch32_insn_mcr_extract_crm(u32 insn);
 typedef bool (pstate_check_t)(unsigned long);
 extern pstate_check_t * const aarch32_opcode_cond_checks[16];
 
-#endif /* __ASSEMBLY__ */
+#endif /* __ASSEMBLER__ */
 
 #endif	/* __ASM_INSN_H */

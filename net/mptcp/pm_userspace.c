@@ -337,7 +337,11 @@ int mptcp_pm_nl_remove_doit(struct sk_buff *skb, struct genl_info *info)
 
 	release_sock(sk);
 
-	sock_kfree_s(sk, match, sizeof(*match));
+	kfree_rcu_mightsleep(match);
+	/* Adjust sk_omem_alloc like sock_kfree_s() does, to match
+	 * with allocation of this memory by sock_kmemdup()
+	 */
+	atomic_sub(sizeof(*match), &sk->sk_omem_alloc);
 
 	err = 0;
 out:
@@ -415,7 +419,7 @@ int mptcp_pm_nl_subflow_create_doit(struct sk_buff *skb, struct genl_info *info)
 	if (err)
 		mptcp_userspace_pm_delete_local_addr(msk, &entry);
 	else
-		msk->pm.subflows++;
+		msk->pm.extra_subflows++;
 	spin_unlock_bh(&msk->pm.lock);
 
  create_err:

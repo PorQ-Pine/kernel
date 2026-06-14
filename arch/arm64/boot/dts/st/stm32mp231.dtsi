@@ -1064,28 +1064,6 @@
 				st,bank-name = "GPIOI";
 				status = "disabled";
 			};
-
-			gpioj: gpio@442d0000 {
-				reg = <0x90000 0x400>;
-				gpio-controller;
-				#gpio-cells = <2>;
-				interrupt-controller;
-				#interrupt-cells = <2>;
-				clocks = <&scmi_clk CK_SCMI_GPIOJ>;
-				st,bank-name = "GPIOJ";
-				status = "disabled";
-			};
-
-			gpiok: gpio@442e0000 {
-				reg = <0xa0000 0x400>;
-				gpio-controller;
-				#gpio-cells = <2>;
-				interrupt-controller;
-				#interrupt-cells = <2>;
-				clocks = <&scmi_clk CK_SCMI_GPIOK>;
-				st,bank-name = "GPIOK";
-				status = "disabled";
-			};
 		};
 
 		rtc: rtc@46000000 {
@@ -1201,13 +1179,12 @@
 		};
 
 		intc: interrupt-controller@4ac10000 {
-			compatible = "arm,cortex-a7-gic";
+			compatible = "arm,gic-400";
 			reg = <0x4ac10000 0x1000>,
-			      <0x4ac20000 0x2000>,
-			      <0x4ac40000 0x2000>,
-			      <0x4ac60000 0x2000>;
+			      <0x4ac20000 0x20000>,
+			      <0x4ac40000 0x20000>,
+			      <0x4ac60000 0x20000>;
 			#interrupt-cells = <3>;
-			#address-cells = <1>;
 			interrupt-controller;
 		};
 	};

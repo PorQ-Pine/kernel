@@ -49,9 +49,12 @@ struct xe_eu_stall_data_stream {
 	wait_queue_head_t poll_wq;
 	size_t data_record_size;
 	size_t per_xecore_buf_size;
+	unsigned int fw_ref;
 
 	struct xe_gt *gt;
 	struct xe_bo *bo;
+	/* Lock to protect data buffer pointers */
+	struct mutex xecore_buf_lock;
 	struct per_xecore_buf *xecore_buf;
 	struct {
 		bool reported_to_user;
@@ -122,6 +125,27 @@ struct xe_eu_stall_data_xe2 {
 	__u64 unused[6];
 } __packed;
 
+/*
+ * EU stall data format for Xe3p arch GPUs.
+ */
+struct xe_eu_stall_data_xe3p {
+	__u64 ip_addr:61;	  /* Bits 0  to 60  */
+	__u64 tdr_count:8;	  /* Bits 61 to 68  */
+	__u64 other_count:8;	  /* Bits 69 to 76  */
+	__u64 control_count:8;	  /* Bits 77 to 84  */
+	__u64 pipestall_count:8;  /* Bits 85 to 92  */
+	__u64 send_count:8;	  /* Bits 93 to 100 */
+	__u64 dist_acc_count:8;   /* Bits 101 to 108 */
+	__u64 sbid_count:8;	  /* Bits 109 to 116 */
+	__u64 sync_count:8;	  /* Bits 117 to 124 */
+	__u64 inst_fetch_count:8; /* Bits 125 to 132 */
+	__u64 active_count:8;	  /* Bits 133 to 140 */
+	__u64 ex_id:3;		  /* Bits 141 to 143 */
+	__u64 end_flag:1;	  /* Bit  144 */
+	__u64 unused_bits:47;
+	__u64 unused[5];
+} __packed;
+
 const u64 eu_stall_sampling_rates[] = {251, 251 * 2, 251 * 3, 251 * 4, 251 * 5, 251 * 6, 251 * 7};
 
 /**
@@ -165,10 +189,13 @@ size_t xe_eu_stall_data_record_size(struct xe_device *xe)
 {
 	size_t record_size = 0;
 
-	if (xe->info.platform == XE_PVC)
-		record_size = sizeof(struct xe_eu_stall_data_pvc);
+	if (GRAPHICS_VER(xe) >= 35)
+		record_size = sizeof(struct xe_eu_stall_data_xe3p);
 	else if (GRAPHICS_VER(xe) >= 20)
 		record_size = sizeof(struct xe_eu_stall_data_xe2);
+	else if (xe->info.platform == XE_PVC)
+		record_size = sizeof(struct xe_eu_stall_data_pvc);
+
 
 	xe_assert(xe, is_power_of_2(record_size));
 
@@ -207,6 +234,9 @@ int xe_eu_stall_init(struct xe_gt *gt)
 {
 	struct xe_device *xe = gt_to_xe(gt);
 	int ret;
+
+	if (!xe_eu_stall_supported_on_platform(xe))
+		return 0;
 
 	gt->eu_stall = kzalloc(sizeof(*gt->eu_stall), GFP_KERNEL);
 	if (!gt->eu_stall) {
@@ -253,11 +283,13 @@ static int set_prop_eu_stall_wait_num_reports(struct xe_device *xe, u64 value,
 static int set_prop_eu_stall_gt_id(struct xe_device *xe, u64 value,
 				   struct eu_stall_open_properties *props)
 {
-	if (value >= xe->info.gt_count) {
+	struct xe_gt *gt = xe_device_get_gt(xe, value);
+
+	if (!gt) {
 		drm_dbg(&xe->drm, "Invalid GT ID %llu for EU stall sampling\n", value);
 		return -EINVAL;
 	}
-	props->gt = xe_device_get_gt(xe, value);
+	props->gt = gt;
 	return 0;
 }
 
@@ -278,12 +310,12 @@ static int xe_eu_stall_user_ext_set_property(struct xe_device *xe, u64 extension
 	int err;
 	u32 idx;
 
-	err = __copy_from_user(&ext, address, sizeof(ext));
+	err = copy_from_user(&ext, address, sizeof(ext));
 	if (XE_IOCTL_DBG(xe, err))
 		return -EFAULT;
 
 	if (XE_IOCTL_DBG(xe, ext.property >= ARRAY_SIZE(xe_set_eu_stall_property_funcs)) ||
-	    XE_IOCTL_DBG(xe, ext.pad))
+	    XE_IOCTL_DBG(xe, !ext.property) || XE_IOCTL_DBG(xe, ext.pad))
 		return -EINVAL;
 
 	idx = array_index_nospec(ext.property, ARRAY_SIZE(xe_set_eu_stall_property_funcs));
@@ -308,7 +340,7 @@ static int xe_eu_stall_user_extensions(struct xe_device *xe, u64 extension,
 	if (XE_IOCTL_DBG(xe, ext_number >= MAX_USER_EXTENSIONS))
 		return -E2BIG;
 
-	err = __copy_from_user(&ext, address, sizeof(ext));
+	err = copy_from_user(&ext, address, sizeof(ext));
 	if (XE_IOCTL_DBG(xe, err))
 		return -EFAULT;
 
@@ -378,7 +410,7 @@ static bool eu_stall_data_buf_poll(struct xe_eu_stall_data_stream *stream)
 	u16 group, instance;
 	unsigned int xecore;
 
-	mutex_lock(&gt->eu_stall->stream_lock);
+	mutex_lock(&stream->xecore_buf_lock);
 	for_each_dss_steering(xecore, gt, group, instance) {
 		xecore_buf = &stream->xecore_buf[xecore];
 		read_ptr = xecore_buf->read;
@@ -396,7 +428,7 @@ static bool eu_stall_data_buf_poll(struct xe_eu_stall_data_stream *stream)
 			set_bit(xecore, stream->data_drop.mask);
 		xecore_buf->write = write_ptr;
 	}
-	mutex_unlock(&gt->eu_stall->stream_lock);
+	mutex_unlock(&stream->xecore_buf_lock);
 
 	return min_data_present;
 }
@@ -511,11 +543,13 @@ static ssize_t xe_eu_stall_stream_read_locked(struct xe_eu_stall_data_stream *st
 	unsigned int xecore;
 	int ret = 0;
 
+	mutex_lock(&stream->xecore_buf_lock);
 	if (bitmap_weight(stream->data_drop.mask, XE_MAX_DSS_FUSE_BITS)) {
 		if (!stream->data_drop.reported_to_user) {
 			stream->data_drop.reported_to_user = true;
 			xe_gt_dbg(gt, "EU stall data dropped in XeCores: %*pb\n",
 				  XE_MAX_DSS_FUSE_BITS, stream->data_drop.mask);
+			mutex_unlock(&stream->xecore_buf_lock);
 			return -EIO;
 		}
 		stream->data_drop.reported_to_user = false;
@@ -527,6 +561,7 @@ static ssize_t xe_eu_stall_stream_read_locked(struct xe_eu_stall_data_stream *st
 		if (ret || count == total_size)
 			break;
 	}
+	mutex_unlock(&stream->xecore_buf_lock);
 	return total_size ?: (ret ?: -EAGAIN);
 }
 
@@ -583,6 +618,7 @@ static void xe_eu_stall_stream_free(struct xe_eu_stall_data_stream *stream)
 {
 	struct xe_gt *gt = stream->gt;
 
+	mutex_destroy(&stream->xecore_buf_lock);
 	gt->eu_stall->stream = NULL;
 	kfree(stream);
 }
@@ -606,9 +642,8 @@ static int xe_eu_stall_data_buf_alloc(struct xe_eu_stall_data_stream *stream,
 
 	size = stream->per_xecore_buf_size * last_xecore;
 
-	bo = xe_bo_create_pin_map_at_aligned(tile->xe, tile, NULL,
-					     size, ~0ull, ttm_bo_type_kernel,
-					     XE_BO_FLAG_SYSTEM | XE_BO_FLAG_GGTT, SZ_64);
+	bo = xe_bo_create_pin_map_at_novm(tile->xe, tile, size, ~0ull, ttm_bo_type_kernel,
+					  XE_BO_FLAG_SYSTEM | XE_BO_FLAG_GGTT, SZ_64, false);
 	if (IS_ERR(bo)) {
 		kfree(stream->xecore_buf);
 		return PTR_ERR(bo);
@@ -626,19 +661,18 @@ static int xe_eu_stall_stream_enable(struct xe_eu_stall_data_stream *stream)
 	struct per_xecore_buf *xecore_buf;
 	struct xe_gt *gt = stream->gt;
 	u16 group, instance;
-	unsigned int fw_ref;
 	int xecore;
 
 	/* Take runtime pm ref and forcewake to disable RC6 */
 	xe_pm_runtime_get(gt_to_xe(gt));
-	fw_ref = xe_force_wake_get(gt_to_fw(gt), XE_FW_RENDER);
-	if (!xe_force_wake_ref_has_domain(fw_ref, XE_FW_RENDER)) {
+	stream->fw_ref = xe_force_wake_get(gt_to_fw(gt), XE_FW_RENDER);
+	if (!xe_force_wake_ref_has_domain(stream->fw_ref, XE_FW_RENDER)) {
 		xe_gt_err(gt, "Failed to get RENDER forcewake\n");
 		xe_pm_runtime_put(gt_to_xe(gt));
 		return -ETIMEDOUT;
 	}
 
-	if (XE_WA(gt, 22016596838))
+	if (XE_GT_WA(gt, 22016596838))
 		xe_gt_mcr_multicast_write(gt, ROW_CHICKEN2,
 					  _MASKED_BIT_ENABLE(DISABLE_DOP_GATING));
 
@@ -718,6 +752,7 @@ static int xe_eu_stall_stream_init(struct xe_eu_stall_data_stream *stream,
 	}
 
 	init_waitqueue_head(&stream->poll_wq);
+	mutex_init(&stream->xecore_buf_lock);
 	INIT_DELAYED_WORK(&stream->buf_poll_work, eu_stall_data_buf_poll_work_fn);
 	stream->per_xecore_buf_size = per_xecore_buf_size;
 	stream->sampling_rate_mult = props->sampling_rate_mult;
@@ -793,11 +828,11 @@ static int xe_eu_stall_disable_locked(struct xe_eu_stall_data_stream *stream)
 
 	cancel_delayed_work_sync(&stream->buf_poll_work);
 
-	if (XE_WA(gt, 22016596838))
+	if (XE_GT_WA(gt, 22016596838))
 		xe_gt_mcr_multicast_write(gt, ROW_CHICKEN2,
 					  _MASKED_BIT_DISABLE(DISABLE_DOP_GATING));
 
-	xe_force_wake_put(gt_to_fw(gt), XE_FW_RENDER);
+	xe_force_wake_put(gt_to_fw(gt), stream->fw_ref);
 	xe_pm_runtime_put(gt_to_xe(gt));
 
 	return 0;

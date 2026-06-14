@@ -6,7 +6,7 @@
 
 
 #include "linux/spinlock.h"
-#include <asm/neon.h>
+#include <asm/simd.h>
 #include <linux/clk.h>
 #include <linux/completion.h>
 #include <linux/iio/consumer.h>
@@ -41,6 +41,7 @@
 #include <drm/drm_gem_shmem_helper.h>
 #include <drm/drm_managed.h>
 #include <drm/drm_plane_helper.h>
+#include <drm/drm_print.h>
 #include <drm/drm_rect.h>
 #include <drm/drm_simple_kms_helper.h>
 #include <drm/rockchip_ebc_drm.h>
@@ -287,6 +288,7 @@ MODULE_PARM_DESC(refresh_thread_wait_idle, "Number of ms to wait and last frame 
 static int dithering_method = 2;
 module_param(dithering_method, int, S_IRUGO|S_IWUSR);
 MODULE_PARM_DESC(dithering_method, "Dithering method, 0-2");
+
 
 static int y2_dt_thresholds = 0x070f16;
 module_param(y2_dt_thresholds, int, S_IRUGO|S_IWUSR);
@@ -1000,25 +1002,22 @@ static void rockchip_ebc_partial_refresh(struct rockchip_ebc *ebc,
 				// Reset inner and outer to make sure
 				// pixels that were WAITING stay
 				// valid. For simplicity, set to IDLE.
-				kernel_neon_begin();
-				rockchip_ebc_reset_inner_outer_neon(ebc);
-				kernel_neon_end();
+				scoped_ksimd()
+					rockchip_ebc_reset_inner_outer_neon(ebc);
 			}
 			if (work_item & ROCKCHIP_EBC_WORK_ITEM_INIT) {
 				clip_ongoing_or_waiting = ebc->screen_rect;
 				memset(prelim_target, 0xff, ebc->num_pixels);
-				kernel_neon_begin();
-				rockchip_ebc_schedule_advance_neon(ebc, prelim_target, hints, phase_buffer, &clip_ongoing, &clip_ongoing_or_waiting, 0, ROCKCHIP_EBC_CUSTOM_WF_INIT, 0, ROCKCHIP_EBC_HINT_REDRAW, true);
-				kernel_neon_end();
+				scoped_ksimd()
+					rockchip_ebc_schedule_advance_neon(ebc, prelim_target, hints, phase_buffer, &clip_ongoing, &clip_ongoing_or_waiting, 0, ROCKCHIP_EBC_CUSTOM_WF_INIT, 0, ROCKCHIP_EBC_HINT_REDRAW, true);
 				skip_advance = true;
 				no_schedule_until_clip_empty = true;
 			} else if (work_item & ROCKCHIP_EBC_WORK_ITEM_SUSPEND) {
 				clip_ongoing_or_waiting = ebc->screen_rect;
 				if (!no_off_screen) {
-					kernel_neon_begin();
 					// Use the highest-quality waveform to minimize visible artifacts
-					rockchip_ebc_schedule_advance_neon(ebc, ebc->final_off_screen, hints, phase_buffer, &clip_ongoing, &clip_ongoing_or_waiting, 0, ROCKCHIP_EBC_CUSTOM_WF_GC16, 0, ROCKCHIP_EBC_HINT_REDRAW, true);
-					kernel_neon_end();
+					scoped_ksimd()
+						rockchip_ebc_schedule_advance_neon(ebc, ebc->final_off_screen, hints, phase_buffer, &clip_ongoing, &clip_ongoing_or_waiting, 0, ROCKCHIP_EBC_CUSTOM_WF_GC16, 0, ROCKCHIP_EBC_HINT_REDRAW, true);
 				}
 				no_off_screen = false;
 				skip_advance = true;
@@ -1041,9 +1040,8 @@ static void rockchip_ebc_partial_refresh(struct rockchip_ebc *ebc,
 					}
 				}
 				clip_ongoing_or_waiting = ebc->screen_rect;
-				kernel_neon_begin();
-				rockchip_ebc_schedule_advance_neon(ebc, prelim_target, hints, phase_buffer, &clip_ongoing, &clip_ongoing_or_waiting, 0, ROCKCHIP_EBC_CUSTOM_WF_GC16, 0, ROCKCHIP_EBC_HINT_REDRAW, true);
-				kernel_neon_end();
+				scoped_ksimd()
+					rockchip_ebc_schedule_advance_neon(ebc, prelim_target, hints, phase_buffer, &clip_ongoing, &clip_ongoing_or_waiting, 0, ROCKCHIP_EBC_CUSTOM_WF_GC16, 0, ROCKCHIP_EBC_HINT_REDRAW, true);
 				// Skip a single advance as we have performed one just now
 				skip_advance = true;
 				no_schedule_until_clip_empty = true;
@@ -1079,25 +1077,23 @@ static void rockchip_ebc_partial_refresh(struct rockchip_ebc *ebc,
 			// Disable redraws of redraw_delay <= 0
 			u8 force_hint_mask = ebc->redraw_delay > 0 ? 0 : ROCKCHIP_EBC_HINT_REDRAW;
 			if (ebc->driver_mode == ROCKCHIP_EBC_DRIVER_MODE_FAST) {
-				kernel_neon_begin();
-				rockchip_ebc_schedule_advance_fast_neon(
-					ebc, prelim_target, hints, phase_buffer,
-					&clip_ongoing, &clip_ongoing_or_waiting,
-					early_cancellation_addition, 0,
-					force_hint, force_hint_mask,
-					!no_schedule_until_clip_empty &&
-						!work_item);
-				kernel_neon_end();
+				scoped_ksimd()
+					rockchip_ebc_schedule_advance_fast_neon(
+						ebc, prelim_target, hints, phase_buffer,
+						&clip_ongoing, &clip_ongoing_or_waiting,
+						early_cancellation_addition, 0,
+						force_hint, force_hint_mask,
+						!no_schedule_until_clip_empty &&
+							!work_item);
 			} else if (ebc->driver_mode == ROCKCHIP_EBC_DRIVER_MODE_NORMAL) {
-				kernel_neon_begin();
-				rockchip_ebc_schedule_advance_neon(
-					ebc, prelim_target, hints, phase_buffer,
-					&clip_ongoing, &clip_ongoing_or_waiting,
-					early_cancellation_addition, 0,
-					force_hint, force_hint_mask,
-					!no_schedule_until_clip_empty &&
-						!work_item);
-				kernel_neon_end();
+				scoped_ksimd()
+					rockchip_ebc_schedule_advance_neon(
+						ebc, prelim_target, hints, phase_buffer,
+						&clip_ongoing, &clip_ongoing_or_waiting,
+						early_cancellation_addition, 0,
+						force_hint, force_hint_mask,
+						!no_schedule_until_clip_empty &&
+							!work_item);
 			}
 		}
 		if (drm_rect_width(&clip_ongoing) <= 0 &&
@@ -1850,31 +1846,28 @@ static void rockchip_ebc_plane_atomic_update(struct drm_plane *plane,
 
 		switch (plane_state->fb->format->format) {
 		case DRM_FORMAT_RGB565:
-			kernel_neon_begin();
-			rockchip_ebc_blit_fb_rgb565_y4_hints_neon(
-				ebc, &dst_clip_extended,
-				ctx->prelim_target_buffer[idx_update],
-				ctx->hints_buffer[idx_update], vaddr,
-				plane_state->fb, &src_clip_extended);
-			kernel_neon_end();
+			scoped_ksimd()
+				rockchip_ebc_blit_fb_rgb565_y4_hints_neon(
+					ebc, &dst_clip_extended,
+					ctx->prelim_target_buffer[idx_update],
+					ctx->hints_buffer[idx_update], vaddr,
+					plane_state->fb, &src_clip_extended);
 			break;
 		case DRM_FORMAT_XRGB8888:
-			kernel_neon_begin();
-			rockchip_ebc_blit_fb_xrgb8888_y4_hints_neon(
-				ebc, &dst_clip_extended,
-				ctx->prelim_target_buffer[idx_update],
-				ctx->hints_buffer[idx_update], vaddr,
-				plane_state->fb, &src_clip_extended);
-			kernel_neon_end();
+			scoped_ksimd()
+				rockchip_ebc_blit_fb_xrgb8888_y4_hints_neon(
+					ebc, &dst_clip_extended,
+					ctx->prelim_target_buffer[idx_update],
+					ctx->hints_buffer[idx_update], vaddr,
+					plane_state->fb, &src_clip_extended);
 			break;
 		case DRM_FORMAT_R8:
-			kernel_neon_begin();
-			rockchip_ebc_blit_fb_r8_y4_hints_neon(
-				ebc, &dst_clip_extended,
-				ctx->prelim_target_buffer[idx_update],
-				ctx->hints_buffer[idx_update], vaddr,
-				plane_state->fb, &src_clip_extended);
-			kernel_neon_end();
+			scoped_ksimd()
+				rockchip_ebc_blit_fb_r8_y4_hints_neon(
+					ebc, &dst_clip_extended,
+					ctx->prelim_target_buffer[idx_update],
+					ctx->hints_buffer[idx_update], vaddr,
+					plane_state->fb, &src_clip_extended);
 			break;
 		}
 	}

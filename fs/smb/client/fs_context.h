@@ -20,6 +20,21 @@
 		cifs_dbg(VFS, fmt, ## __VA_ARGS__);	\
 	} while (0)
 
+static inline size_t cifs_io_align(struct fs_context *fc,
+				   const char *name, size_t size)
+{
+	if (!size || !IS_ALIGNED(size, PAGE_SIZE)) {
+		cifs_errorf(fc, "unaligned %s, making it a multiple of %lu bytes\n",
+			    name, PAGE_SIZE);
+		size = umax(round_down(size, PAGE_SIZE), PAGE_SIZE);
+	}
+	return size;
+}
+
+#define CIFS_ALIGN_WSIZE(_fc, _size) cifs_io_align(_fc, "wsize", _size)
+#define CIFS_ALIGN_RSIZE(_fc, _size) cifs_io_align(_fc, "rsize", _size)
+#define CIFS_ALIGN_BSIZE(_fc, _size) cifs_io_align(_fc, "bsize", _size)
+
 enum smb_version {
 	Smb_1 = 1,
 	Smb_20,
@@ -279,6 +294,8 @@ struct smb3_fs_context {
 	bool domainauto:1;
 	bool rdma:1;
 	bool multichannel:1;
+	bool multichannel_specified:1; /* true if user specified multichannel or nomultichannel */
+	bool max_channels_specified:1; /* true if user specified max_channels */
 	bool use_client_guid:1;
 	/* reuse existing guid for multichannel */
 	u8 client_guid[SMB2_CLIENT_GUID_SIZE];
@@ -326,7 +343,23 @@ struct smb3_fs_context {
 
 extern const struct fs_parameter_spec smb3_fs_parameters[];
 
-extern enum cifs_symlink_type get_cifs_symlink_type(struct cifs_sb_info *cifs_sb);
+static inline enum cifs_symlink_type cifs_symlink_type(struct cifs_sb_info *cifs_sb)
+{
+	bool posix = cifs_sb_master_tcon(cifs_sb)->posix_extensions;
+
+	if (cifs_sb->ctx->symlink_type != CIFS_SYMLINK_TYPE_DEFAULT)
+		return cifs_sb->ctx->symlink_type;
+
+	if (cifs_sb->ctx->mfsymlinks)
+		return CIFS_SYMLINK_TYPE_MFSYMLINKS;
+	else if (cifs_sb->ctx->sfu_emul)
+		return CIFS_SYMLINK_TYPE_SFU;
+	else if (cifs_sb->ctx->linux_ext && !cifs_sb->ctx->no_linux_ext)
+		return posix ? CIFS_SYMLINK_TYPE_NATIVE : CIFS_SYMLINK_TYPE_UNIX;
+	else if (cifs_sb->ctx->reparse_type != CIFS_REPARSE_TYPE_NONE)
+		return CIFS_SYMLINK_TYPE_NATIVE;
+	return CIFS_SYMLINK_TYPE_NONE;
+}
 
 extern int smb3_init_fs_context(struct fs_context *fc);
 extern void smb3_cleanup_fs_context_contents(struct smb3_fs_context *ctx);
@@ -359,6 +392,38 @@ static inline void cifs_mount_lock(void)
 static inline void cifs_mount_unlock(void)
 {
 	mutex_unlock(&cifs_mount_mutex);
+}
+
+static inline void cifs_negotiate_rsize(struct TCP_Server_Info *server,
+					struct smb3_fs_context *ctx,
+					struct cifs_tcon *tcon)
+{
+	unsigned int size;
+
+	size = umax(server->ops->negotiate_rsize(tcon, ctx), PAGE_SIZE);
+	if (ctx->rsize)
+		size = umax(umin(ctx->rsize, size), PAGE_SIZE);
+	ctx->rsize = round_down(size, PAGE_SIZE);
+}
+
+static inline void cifs_negotiate_wsize(struct TCP_Server_Info *server,
+					struct smb3_fs_context *ctx,
+					struct cifs_tcon *tcon)
+{
+	unsigned int size;
+
+	size = umax(server->ops->negotiate_wsize(tcon, ctx), PAGE_SIZE);
+	if (ctx->wsize)
+		size = umax(umin(ctx->wsize, size), PAGE_SIZE);
+	ctx->wsize = round_down(size, PAGE_SIZE);
+}
+
+static inline void cifs_negotiate_iosize(struct TCP_Server_Info *server,
+					 struct smb3_fs_context *ctx,
+					 struct cifs_tcon *tcon)
+{
+	cifs_negotiate_rsize(server, ctx, tcon);
+	cifs_negotiate_wsize(server, ctx, tcon);
 }
 
 #endif
